@@ -20,6 +20,9 @@
 # autoscalers read it.
 metrics-server:
   enabled: true
+  args:
+    - --kubelet-preferred-address-types=Hostname,InternalDNS,InternalIP
+    - --kubelet-insecure-tls
 
 # node_exporter's cpufreq collector hangs on arm64 nodes that use the
 # cppc_cpufreq driver. A read of cpuinfo_avg_freq never returns, so scrapes of

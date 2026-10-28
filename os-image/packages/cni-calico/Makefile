@@ -11,4 +11,8 @@ VERSIONS := $(foreach v,$(CALICO_VERSIONS),v$(patsubst v%,%,$(v)))
 CONTENT_SPEC := $(CURDIR)/packaging/nfpm-manifests.yaml
 CONTENT_KIND := manifests
 
+# local.mk sets CNI_DOCKERHUB_MIRROR so crane reads docker.io images from Harbor.
+-include local.mk
+export CNI_DOCKERHUB_MIRROR
+
 include ../cni-common/deb.mk

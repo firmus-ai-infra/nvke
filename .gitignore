@@ -104,3 +104,14 @@ controller/test/e2e/site-bundle*
 # hack/coverage.sh reads the directory. Nothing in it is committed: a profile
 # describes one run on one machine, and CI uploads it as an artifact instead.
 /coverage/
+/chat-logs/
+docs/nico.yaml
+controller-profiles.tar
+nke-controller.tar
+cli/examples/sitespec-local-testing.yaml
+cli/examples/stack-config-dev.json
+cli/examples/tenant-cluster.yaml
+docs/build-artifacts.md
+controller/test/fixtures/releases/nvke-nico-vms-24.04-amd64-clusterrelease-test.yaml
+controller/test/fixtures/releases/nvke-nico-vms-24.04-amd64-test.yaml
+controller/test/fixtures/releases/nvke-nico-vms-24.04-amd64-nodepoolrelease-test.yaml
