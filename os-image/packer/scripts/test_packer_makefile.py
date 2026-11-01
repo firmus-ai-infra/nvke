@@ -1824,14 +1824,15 @@ image_transport_ref docker.io/calico/node:v3.30.1
         if modern_bash is None:
             self.skipTest("Bash 4 or newer is required for CNI bundle tests")
         # `make lock` resolves the tag through the mirror, with retry and
-        # fallback. A build never resolves a tag to decide what to fetch: it
-        # probes the mirror once for the locked digest, and reads the tag only
-        # for the moved-tag notice.
+        # fallback. A build never resolves a tag to decide what to fetch: a
+        # configured mirror is the pull target for the locked digest, with no
+        # probe that the manifest already exists. The tag is read only for
+        # the moved-tag notice.
         cases = (
             ("lock: digest miss", "--write-lock", "1", "0", "0", 3, 0, 0, True),
             ("lock: transfer miss", "--write-lock", "0", "1", "0", 1, 3, 0, True),
-            ("build: mirror serves digest", "", "0", "0", "0", 1, 1, 1, False),
-            ("build: mirror lacks digest", "", "0", "0", "1", 1, 0, 1, True),
+            ("build: mirror is the pull target", "", "0", "0", "0", 1, 1, 0, False),
+            ("build: missing manifest still pulls the mirror", "", "0", "0", "1", 1, 1, 0, False),
         )
         for (
             name,
