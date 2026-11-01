@@ -97,14 +97,6 @@ pull_images() {
   "$CRANE" pull --platform "linux/${ARCH}" "$@" "$out"
 }
 
-# mirror_has_digest <mirror_ref> <digest> reports whether the mirror serves the
-# exact manifest the lock names. One probe, no retry: this only chooses a
-# transport, and the canonical reference is always there to fall back to.
-mirror_has_digest() {
-  local mirror_ref="$1" digest="$2"
-  "$CRANE" manifest "${mirror_ref%:*}@${digest}" >/dev/null 2>&1
-}
-
 # warn_if_tag_moved <ref> <locked_digest> reports a tag that no longer resolves
 # to what the lock pins. Informational by design: the build fetches the locked
 # digest either way. Upstream branch tags such as ovn-kubernetes' release-X.Y
@@ -284,7 +276,10 @@ stage_images() {
       [[ -n "$digest" ]] || die "${LOCK} has no digest for ${ref}; run 'make lock' first"
       [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
         die "${LOCK} has a malformed digest for ${ref}: ${digest}"
-      if [[ "$mirror_ref" != "$ref" ]] && mirror_has_digest "$mirror_ref" "$digest"; then
+      # A configured mirror is the pull target even when it does not yet
+      # have the manifest. A pull-through cache fills itself on this pull.
+      # The locked digest stays on the reference, so the bytes cannot drift.
+      if [[ "$mirror_ref" != "$ref" ]]; then
         transport_ref="$mirror_ref"
         using_mirror=true
       fi
