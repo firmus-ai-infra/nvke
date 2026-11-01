@@ -16,21 +16,47 @@ debug detail or `--json-logs` for structured logs.
 nvkectl bootstrap site -f sitespec.yaml 2>&1 | tee bootstrap.log
 ```
 
+#### The phases
+
+The command runs in five phases, in this order: `preflight`,
+`bootstrap_cluster` (creating the Kind cluster), `engine_deploy` (deploying the
+controller), `site_cluster` (creating the site cluster and saving its outputs)
+and `finish` (making the control-plane nodes schedulable, with
+`infra.provider: nico` installing the NVKE stack on the site cluster, then
+collecting diagnostics and deleting the Kind cluster). When a phase ends, nvkectl logs one
+`phase finished` line with its `phase`, its `outcome` (`succeeded` or
+`failed`) and its `duration_ms`. Log lines also carry `operation`, `cluster`
+(once the site spec is loaded) and, while a phase runs, `phase`. The phase that
+failed is the one whose `phase finished` line says `outcome=failed`.
+
+```bash
+grep 'phase finished' bootstrap.log
+```
+
+A line looks like this (abridged):
+
+```text
+level=INFO msg="phase finished" phase=engine_deploy outcome=succeeded duration_ms=61234 trace_id=<trace-id> span_id=<span-id> operation=bootstrap_site cluster=nvke-site
+```
+
+`--dry-run` ends after `preflight`. `finish` also runs after a failure, once
+the Kind cluster exists, so a failed run logs the failed phase and then
+`finish`. A failure before the Kind cluster exists has no `finish` line.
+
 #### The trace ID
 
 Each attempt has its own trace ID. Include it when reporting a failure. It
 also finds the controller's records of the site cluster request: the API call,
-the cluster and node pool workflows, and their steps. Bootstrap does not
-configure span export for the controller it installs, so these logs are the
-record.
+the cluster and node pool workflows, and their steps. Without an OTLP endpoint
+(below), the controller's logs are the record.
 
 Search the controller logs for it, in the diagnostics directory or in a
 [retained bootstrap cluster](#the-retained-bootstrap-cluster):
 
 ```bash
 grep -F '<trace-id>' bootstrap.log                                          # nvkectl's log
-grep -rF '<trace-id>' cluster-diagnostics/nke-controller/                   # diagnostics directory
-kubectl -n nke-controller logs deploy/nke-controller | grep -F '<trace-id>' # retained cluster
+grep -rF '<trace-id>' cluster-diagnostics/nvke-controller/                   # diagnostics directory
+kubectl -n nvke-controller logs deploy/nvke-controller | grep -F '<trace-id>' # retained cluster
 ```
 
 This works with text and JSON logs. Each node is provisioned by a workflow with
@@ -43,6 +69,77 @@ node, run the same searches in two steps:
    `workflow_id`.
 2. Search for that `workflow_id`. The matches are the node's workflow and
    activity steps, including the one that failed.
+
+#### Send nvkectl's telemetry to a backend
+
+nvkectl can send its spans and log records to an OpenTelemetry collector over
+OTLP/gRPC. Each carries the run's trace ID, so you can search the backend for
+the `Trace ID:` that nvkectl prints. What nvkectl writes to stderr does not
+change. Each [phase](#the-phases) is also a span named `phase.<name>`, a child
+of the run's root span, with `nvke.phase` and `nvke.outcome` attributes and an
+error status when it failed.
+
+##### With environment variables
+
+| Variable | What it does |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The collector's address, as `host:port` or an `http://` or `https://` URL, with no credentials and no path. With no scheme, nvkectl uses TLS. Every nvkectl command reads it. |
+| `OTEL_EXPORTER_OTLP_INSECURE` | With an endpoint that has no scheme, `true` sends without TLS. An `http://` URL already does. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Headers for the collector, such as a token, as `key=value` pairs separated by commas. nvkectl sends them, and `bootstrap site` also gives them to the temporary controller. |
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4317
+export OTEL_EXPORTER_OTLP_HEADERS='authorization=Bearer <TOKEN>'
+nvkectl bootstrap site -f sitespec.yaml
+```
+
+`bootstrap site` also exports the temporary controller's spans to this endpoint,
+with these headers, so the endpoint must be reachable from inside the Kind
+cluster. A loopback endpoint (`localhost`, `127.0.0.1`, `::1`) is used by nvkectl
+only: nvkectl prints a warning and the controller's spans are not exported.
+
+If the endpoint is wrong, nvkectl prints one warning that names the variable
+and says what to do, sends no telemetry, and runs the command.
+
+##### With flags on `bootstrap site`
+
+`--otlp-endpoint <host:port or URL>` sets the collector's address and
+`--otlp-insecure` sends without TLS. When `--otlp-endpoint` is set, it is used
+instead of `OTEL_EXPORTER_OTLP_ENDPOINT`:
+
+```bash
+nvkectl bootstrap site -f sitespec.yaml --otlp-endpoint 192.0.2.10:4317 --otlp-insecure
+```
+
+The temporary controller in the bootstrap cluster exports its spans to the same
+endpoint, so the endpoint must be reachable from inside the Kind cluster. A
+loopback address (`localhost`, `127.0.0.1`, `::1`, `0.0.0.0` or `::`) is
+rejected; use the host's LAN address or a DNS name.
+
+A wrong flag value is an error: the command stops before bootstrap starts and
+the error names the flag.
+
+Headers cannot be passed as a flag. Set `OTEL_EXPORTER_OTLP_HEADERS`. nvkectl
+sends them to the endpoint you set with `--otlp-endpoint` and also gives them to
+the temporary controller, so its spans reach the same backend. With an `http://`
+endpoint or `--otlp-insecure`, the headers travel without TLS and nvkectl prints
+a warning. The controller keeps them in its Deployment and Helm release until
+the bootstrap cluster is deleted.
+
+nvkectl verifies the collector's certificate against the host's trusted
+certificate authorities, for spans and for logs. It does not use
+`OTEL_EXPORTER_OTLP_CERTIFICATE` or the client certificate variables, so a
+collector with a private certificate authority needs that authority in the
+host's trust store, and a collector that requires client certificates is not
+supported. Use the collector's gRPC address, usually `:4317`, not its HTTP
+address such as `https://<COLLECTOR_HOST>:4318/v1/traces`.
+
+If the collector cannot be reached, nvkectl prints one warning and the command
+still succeeds.
+
+Commands that use a site, such as `get clusters`, send to the endpoint stored
+with `nvkectl config set-site --otlp-endpoint`; see
+[Export a site's telemetry](user-flow.md#export-a-sites-telemetry).
 
 ### The diagnostics directory
 
@@ -73,7 +170,7 @@ they are collected in that case too.
 For a deployment failure, start with `all-resources.txt`, then check the
 failing pod in `pods-described.txt` and its `logs.txt`. Key namespaces are
 `postgres`, `temporal`, `spire-server`, `capi-system`, `provisioned-system`
-(`capnico-system` with `infra.provider: nico`) and `nke-controller`.
+(`capnico-system` with `infra.provider: nico`) and `nvke-controller`.
 
 ### The retained bootstrap cluster
 
@@ -83,15 +180,19 @@ accepts the site cluster request and before the outputs are saved, or, with
 `infra.provider: nico`, when the create request got no answer, so the
 controller may have created the site cluster. A failed
 cleanup can also leave it behind. The logs report retention and, when
-available, the kubeconfig path.
+available, the kubeconfig path (abridged):
 
 ```text
-level=WARN msg="bootstrap failed after site cluster creation; retaining the bootstrap kind cluster for recovery" cluster=nvkectl-bootstrap kubeconfig=/tmp/nvkectl-bootstrap-kubeconfig-.../config
+level=WARN msg="bootstrap failed after site cluster creation; retaining the bootstrap kind cluster for recovery" bootstrap_kind_cluster=nvkectl-bootstrap kubeconfig=/tmp/nvkectl-bootstrap-kubeconfig-.../config trace_id=<trace-id> span_id=<span-id> operation=bootstrap_site cluster=nvke-site phase=finish
 ```
+
+If you set `OTEL_EXPORTER_OTLP_HEADERS`, the kept cluster also holds those
+headers, typically a token, in the controller's Deployment and Helm release, so
+delete it when you are done.
 
 With `infra.provider: nico`, the kept cluster also holds the
 NICo token and the tenant password as Secrets (`nico-credentials` in
-`capnico-system`, `dgxc-tenant-credentials` in `nke-controller`), so delete it
+`capnico-system`, `dgxc-tenant-credentials` in `nvke-controller`), so delete it
 when you are done. After a failure past site cluster creation but before every
 control-plane node joined, it also holds the machines for the NICo instances
 CAPNICo allocated, and those must be released before the cluster is deleted: see
@@ -105,7 +206,7 @@ captures:
 ```bash
 export KUBECONFIG=<bootstrap-kubeconfig>
 kubectl get pods -A
-kubectl -n nke-controller logs deploy/nke-controller --tail=500
+kubectl -n nvke-controller logs deploy/nvke-controller --tail=500
 ```
 
 To pick out one attempt or one node, see [The trace ID](#the-trace-id).
@@ -193,13 +294,14 @@ The final `Error:` identifies the phase and the failed step. If it names a
 command such as `helm ...: exit status 1`, read the command output that
 follows for the cause, such as a chart download error or a timeout.
 
-| Failure phase | Where to look first | Before retrying |
-|---|---|---|
-| Preflight | The error and the site spec; nothing has been created | Fix the reported problem |
-| Kind creation | `bootstrap-cluster-create-failure.txt` | Fix the cause and delete any leftover bootstrap cluster |
-| Controller deploy | Pod events and logs in the diagnostics directory; site nodes are untouched | Fix the cause and delete any leftover bootstrap cluster |
-| Site provisioning | Controller logs, then the affected node's agent and kubelet journals | Inspect the site and the retained bootstrap cluster; abandon the attempt only as described [below](#when-it-is-safe-to-run-bootstrap-again) |
-| Saving outputs or making nodes schedulable | The error's recovery instructions; the site cluster already exists | Recover the missing outputs or run the final command; do not bootstrap the existing cluster again |
+| Failure phase | Logged `phase` | Where to look first | Before retrying |
+|---|---|---|---|
+| Preflight | `preflight` | The error and the site spec; nothing has been created | Fix the reported problem |
+| Kind creation | `bootstrap_cluster` | `bootstrap-cluster-create-failure.txt` | Fix the cause and delete any leftover bootstrap cluster |
+| Controller deploy | `engine_deploy` | Pod events and logs in the diagnostics directory; site nodes are untouched | Fix the cause and delete any leftover bootstrap cluster |
+| Site provisioning | `site_cluster` | Controller logs, then the affected node's agent and kubelet journals | Inspect the site and the retained bootstrap cluster; abandon the attempt only as described [below](#when-it-is-safe-to-run-bootstrap-again) |
+| Saving outputs | `site_cluster` | The error's recovery instructions; the site cluster already exists | Recover the missing outputs; do not bootstrap the existing cluster again |
+| Making nodes schedulable | `finish` | The error's recovery instructions; the site cluster and its outputs exist | Run the final command; do not bootstrap the existing cluster again |
 
 ## Common failures
 
@@ -278,9 +380,13 @@ sudo -n -i nerdctl pull <image>
 
 **`kind load image-archive ...: exit status 1`** or **`want two sha256 digests`**
 
-The image exists locally but could not be exported into the Kind cluster. Pull
-it again with the platform of the bootstrap host and re-run. A multi-platform
-image that was only partially pulled is the usual cause.
+The image exists locally but could not be exported into the Kind cluster,
+usually because the archive lists a platform whose content is not in the local
+store. kind imports every platform an image index lists, so nvkectl pulls every
+platform of an image pinned by an index digest. For a tag, pull it again for the
+bootstrap host's platform and re-run. To load only one platform of a pinned
+image, pin that platform's manifest digest instead:
+`nerdctl image inspect --mode=native --format '{{.ManifestDesc.Digest}}' <image>`.
 
 ### Controller deploy
 
@@ -377,8 +483,6 @@ Something deleted the cluster through the controller's API while bootstrap was
 waiting. Check for another operator or automation using the same bootstrap
 cluster.
 
-### Finish
-
 **`tenant kubeconfig for "<name>" was not published within 2m0s`**
 
 The site cluster is provisioned, but bootstrap could not retrieve its
@@ -401,13 +505,7 @@ Keep the bootstrap cluster. Check the error for a failed Kubernetes read or
 file write. Recovery needs `clusterstaticentry-crd.yaml` and
 `clusterstaticentries.yaml` alongside the site kubeconfig when mTLS is enabled.
 
-**`making the control-plane nodes schedulable: ...`**
-
-The site cluster and its outputs are ready. Run the manual `kubectl taint`
-command printed in the error using the saved site kubeconfig. Do not run
-bootstrap again for this failure.
-
-### The encryption key was not saved
+#### The encryption key was not saved
 
 **`cluster "<name>" is up and its etcd data is encrypted, but its encryption key was not saved to <path>`**
 
@@ -415,16 +513,24 @@ Keep the bootstrap cluster and run the recovery command printed in the error.
 If an earlier failure prevented key capture, locate and save the key Secret:
 
 ```bash
-kubectl --kubeconfig <bootstrap-kubeconfig> -n nke-controller get secrets | grep etcd-encryption-key-
+kubectl --kubeconfig <bootstrap-kubeconfig> -n nvke-controller get secrets | grep etcd-encryption-key-
 # Creates a private file; noclobber refuses to overwrite an existing one.
 ( umask 077; set -o noclobber
-  kubectl --kubeconfig <bootstrap-kubeconfig> -n nke-controller get secret <secret-name> -o json > <secret-name>.json )
+  kubectl --kubeconfig <bootstrap-kubeconfig> -n nvke-controller get secret <secret-name> -o json > <secret-name>.json )
 ```
 
 Confirm the saved file contains the expected Secret, and keep it with the
 cluster's credentials before deleting the bootstrap cluster or resetting nodes.
 For backup and restore usage, see
 [Pre-Provisioned Nodes](../../docs/site-bootstrap/pre-provisioned-nodes.md#troubleshooting).
+
+### Finish
+
+**`making the control-plane nodes schedulable: ...`**
+
+The site cluster and its outputs are ready. Run the manual `kubectl taint`
+command printed in the error using the saved site kubeconfig. Do not run
+bootstrap again for this failure.
 
 ## When it is safe to run bootstrap again
 

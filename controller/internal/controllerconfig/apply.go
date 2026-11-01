@@ -52,6 +52,7 @@ func (c *Config) ApplyTo(cfg *config.Config) {
 	cfg.FieldManagerMachineHealthIssueName = c.FieldManager.MachineHealthIssueName
 	cfg.ManagedByLabelValue = c.ManagedByLabelValue
 	cfg.ManagementNamespace = c.ManagementNamespace
+	cfg.RBACConfigMapName = c.RBACConfigMapName
 	cfg.MetricsListenAddress = c.MetricsListenAddress
 	cfg.SupportedInfraProviders = slices.Clone(c.SupportedInfraProviders)
 	cfg.NodeMetadataAllowlistedLabelKeys = slices.Clone(c.NodeMetadataAllowlistedLabelKeys)
@@ -65,6 +66,11 @@ func (c *Config) ApplyTo(cfg *config.Config) {
 	cfg.CertRenewalControllerEnabled = c.CertRenewal.ControllerEnabled
 	cfg.CertRenewalInterval = c.CertRenewal.Interval.Duration
 	cfg.CertRenewalThresholdDays = c.CertRenewal.ThresholdDays
+
+	cfg.CredentialMonitoringEnabled = c.CredentialMonitoring.Enabled
+	cfg.CertificateInspectionInterval = c.CredentialMonitoring.InspectionInterval.Duration
+	cfg.CertificateObservationMaxAge = c.CredentialMonitoring.ObservationMaxAge.Duration
+	cfg.CertificateWarningDays = c.CredentialMonitoring.WarningDays
 
 	cfg.KubeadmImageRepository = c.KubeadmImageRepository
 	cfg.CNIImageRegistry = c.CNIImageRegistry
@@ -123,6 +129,6 @@ func (c *Config) ApplyTo(cfg *config.Config) {
 	cfg.Teleport.TokenNamePrefix = c.Teleport.TokenNamePrefix
 	cfg.Teleport.ResourceGroupLabelValue = c.Teleport.ResourceGroupLabelValue
 
-	cfg.PermissiveMode = c.PermissiveMode
+	cfg.PermissiveMode = c.APIAuth.Permissive
 	cfg.AllowControlPlaneWithoutVIP = c.AllowControlPlaneWithoutVIP
 }

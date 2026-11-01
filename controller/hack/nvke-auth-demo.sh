@@ -31,7 +31,7 @@ Permissive (NKE_PERMISSIVE_MODE=true tilt up):
   produces. That counter check is the extra case in a permissive run.
 
 The mode is read from the live Deployment's AUTH_CONFIG_PATH and the apiAuth.enabled
-and permissiveMode keys of its controller config ConfigMap, so the same script
+and apiAuth.permissive keys of its controller config ConfigMap, so the same script
 covers every deployment. Override it with --mode.
 
 Scaffolding lives in deploy/k8s/nvke-auth-dev.yaml (namespaces, service accounts,
@@ -99,13 +99,33 @@ need yq
 
 if [[ -z "${NVKE_CONTROLLER_NAMESPACE}" ]]; then
   # Same order nvkectl uses: the greenfield namespace if it holds the auth
-  # ConfigMap, else the legacy one. Only a confirmed absence falls back.
-  found="$(
-    "${KUBECTL[@]}" get configmap "${NVKE_AUTH_CONFIGMAP}" -n nke-controller \
-      --ignore-not-found -o name 2>&1
-  )" || die "cannot look up configmap nke-controller/${NVKE_AUTH_CONFIGMAP}: ${found}"
+  # ConfigMap, then the one a site installed before the nvke rename keeps, else
+  # the legacy one. Only a confirmed absence of all of them falls back.
   NVKE_CONTROLLER_NAMESPACE="cloud-workflow-engine"
-  grep -qx "configmap/${NVKE_AUTH_CONFIGMAP}" <<<"${found}" && NVKE_CONTROLLER_NAMESPACE="nke-controller"
+  ns_denial=""
+  ns_readable=false
+  for candidate in nvke-controller nke-controller; do
+    # --ignore-not-found covers absence, not denial. RBAC scoped to one
+    # namespace answers Forbidden for the other, so keep the denial and try
+    # the rest rather than stopping at it, the way nvkectl's search does.
+    if ! found="$(
+      "${KUBECTL[@]}" get configmap "${NVKE_AUTH_CONFIGMAP}" -n "${candidate}" \
+        --ignore-not-found -o name 2>&1
+    )"; then
+      ns_denial="${ns_denial:-cannot look up configmap ${candidate}/${NVKE_AUTH_CONFIGMAP}: ${found}}"
+      continue
+    fi
+    ns_readable=true
+    if grep -qx "configmap/${NVKE_AUTH_CONFIGMAP}" <<<"${found}"; then
+      NVKE_CONTROLLER_NAMESPACE="${candidate}"
+      break
+    fi
+  done
+  # Falling back needs a confirmed absence. Every candidate denied confirms
+  # nothing, so report the denial rather than guessing the legacy namespace.
+  if [[ "${ns_readable}" == false && -n "${ns_denial}" ]]; then
+    die "${ns_denial}"
+  fi
   export NVKE_CONTROLLER_NAMESPACE
 fi
 
@@ -128,7 +148,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   exit 2
 fi
 
-# nvke-token.sh picks nke-controller or cloud-workflow-engine when unset.
+# nvke-token.sh picks nvke-controller, nke-controller or cloud-workflow-engine when unset.
 NKE_DEPLOYMENT="$("${SCRIPT_DIR}/nvke-token.sh" --deployment)"
 [[ -n "${NKE_DEPLOYMENT}" ]] || die "could not resolve NVKE's Deployment in ${NVKE_CONTROLLER_NAMESPACE}"
 
@@ -148,7 +168,8 @@ if [[ -z "${MODE}" ]]; then
   auth_path="$(container_env AUTH_CONFIG_PATH)"
   controller_config="$("${KUBECTL[@]}" get configmap "${NVKE_CONTROLLER_CONFIGMAP}" -n "${NVKE_CONTROLLER_NAMESPACE}" \
     -o jsonpath='{.data.config\.yaml}' 2>/dev/null)"
-  permissive="$(yq '.permissiveMode' <<<"${controller_config}")"
+  # permissiveMode is where a controller older than apiAuth.permissive keeps it.
+  permissive="$(yq '.apiAuth.permissive // .permissiveMode' <<<"${controller_config}")"
   # A configuration the chart renders reaches NVKE as apiAuth in the controller
   # config ConfigMap, with no AUTH_CONFIG_PATH.
   api_auth="$(yq '.apiAuth.enabled // false' <<<"${controller_config}")"

@@ -15,6 +15,7 @@ import (
 	"github.com/caarlos0/env/v11"
 
 	"github.com/dsx-ai-factory/nvke/controller/internal/constants"
+	"github.com/dsx-ai-factory/nvke/controller/internal/nvkerbac"
 )
 
 const (
@@ -243,6 +244,18 @@ type Config struct {
 	// CertRenewalThresholdDays is passed to the certificate-renewal runbook.
 	CertRenewalThresholdDays int `controllerconfig:"certRenewal.thresholdDays"`
 
+	// CredentialMonitoringEnabled enables read-only credential inspection independently of renewal.
+	CredentialMonitoringEnabled bool `controllerconfig:"credentialMonitoring.enabled"`
+
+	// CertificateInspectionInterval is the interval between node certificate inspections.
+	CertificateInspectionInterval time.Duration `controllerconfig:"credentialMonitoring.inspectionInterval"`
+
+	// CertificateObservationMaxAge is the oldest observation that still counts as fresh.
+	CertificateObservationMaxAge time.Duration `controllerconfig:"credentialMonitoring.observationMaxAge"`
+
+	// CertificateWarningDays is how many days before expiry a certificate is reported as expiring.
+	CertificateWarningDays int `controllerconfig:"credentialMonitoring.warningDays"`
+
 	// NVKESiteControllerName is the name of the site controller
 	NVKESiteControllerName string `env:"NKE_SITE_CONTROLLER_NAME"`
 
@@ -269,13 +282,20 @@ type Config struct {
 	ManagedByLabelValue string `controllerconfig:"managedByLabelValue"`
 
 	// ManagementNamespace is the shared management-plane namespace holding the
-	// tenant-access Secrets, the nke-rbac ConfigMap and the OIDC-mode CAPI
+	// tenant-access Secrets, the RBAC ConfigMap and the OIDC-mode CAPI
 	// objects. Empty means constants.LegacyManagementNamespace, so a config.yaml
 	// written before this key existed keeps today's behavior exactly. Read it
 	// through ManagementNamespaceOrDefault rather than directly: unlike the
 	// label keys, the old namespace is not also read, so an empty value reaching
 	// a client would address the wrong namespace rather than fall back.
 	ManagementNamespace string `controllerconfig:"managementNamespace"`
+
+	// RBACConfigMapName is the operator-managed ConfigMap in ManagementNamespace
+	// holding the RBAC manifest applied into tenant clusters. Empty means
+	// nvkerbac.LegacyConfigMapName, for the same reason ManagementNamespace
+	// falls back. Read it through RBACConfigMapSource, which pairs it with the
+	// namespace it is resolved against.
+	RBACConfigMapName string `controllerconfig:"rbacConfigMapName"`
 
 	// SpiffeEnabled is a feature flag to enable SPIFFE support.
 	SpiffeEnabled bool `controllerconfig:"spire.spiffeEnabled"`
@@ -403,7 +423,7 @@ type Config struct {
 	// PermissiveMode evaluates and logs authentication and admission decisions
 	// without enforcing them, so no request is rejected. No effect while
 	// authentication is off: AuthConfigPath unset and apiAuth.enabled false.
-	PermissiveMode bool `controllerconfig:"permissiveMode"`
+	PermissiveMode bool `controllerconfig:"apiAuth.permissive"`
 
 	// Tracing configures the export of OpenTelemetry spans to an OTLP collector.
 	Tracing TracingConfig
@@ -586,6 +606,19 @@ func (c Config) ManagementNamespaceOrDefault() string {
 	return c.ManagementNamespace
 }
 
+// RBACConfigMapSource returns the ConfigMap holding the tenant RBAC manifest:
+// the management namespace and the name together, because a name resolved
+// against the wrong namespace reads nothing. The name falls back to
+// nvkerbac.LegacyConfigMapName when unset, for the reason
+// ManagementNamespaceOrDefault gives.
+func (c Config) RBACConfigMapSource() nvkerbac.Source {
+	name := c.RBACConfigMapName
+	if name == "" {
+		name = nvkerbac.LegacyConfigMapName
+	}
+	return nvkerbac.Source{Namespace: c.ManagementNamespaceOrDefault(), Name: name}
+}
+
 // Validate checks the settings the environment supplies. nvke-controller-config
 // validates its own when it loads.
 func (c *Config) Validate() error {
@@ -593,6 +626,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateDBCredentials(); err != nil {
+		return err
+	}
+	if err := c.validateCredentialMonitoring(); err != nil {
 		return err
 	}
 	if c.SpireServerAPIAddress == "" {

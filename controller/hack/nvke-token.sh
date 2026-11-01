@@ -13,14 +13,16 @@
 #
 # Environment:
 #   KUBE_CONTEXT               kube context (default: kubeconfig current-context)
-#   NVKE_CONTROLLER_NAMESPACE  NVKE's namespace (default nke-controller when it
-#                              holds NVKE_AUTH_CONFIGMAP or Deployment nke-controller,
-#                              else cloud-workflow-engine)
+#   NVKE_CONTROLLER_NAMESPACE  NVKE's namespace (default nvke-controller, then
+#                              nke-controller, whichever holds NVKE_AUTH_CONFIGMAP
+#                              or the Deployment of the same name; else
+#                              cloud-workflow-engine)
 #   NVKE_AUTH_CONFIGMAP         authentication ConfigMap (default nvke-auth-config;
 #                              a site that pinned apiAuth.configMap.name sets
 #                              this to nke-auth-config)
-#   NKE_DEPLOYMENT             NVKE's Deployment (default nke-controller when it
-#                              exists in NVKE_CONTROLLER_NAMESPACE, else cloud-workflow-engine)
+#   NKE_DEPLOYMENT             NVKE's Deployment (default nvke-controller, then
+#                              nke-controller, whichever exists in
+#                              NVKE_CONTROLLER_NAMESPACE, else cloud-workflow-engine)
 #   NVKE_CONTROLLER_CONFIGMAP  NVKE's settings ConfigMap, read only when AUTH_CONFIG_PATH
 #                              is unset (default: the one the Deployment mounts, else the
 #                              first of nvke-controller-config and nke-controller-config)
@@ -56,21 +58,41 @@ KUBECTL=(kubectl)
 
 if [[ -z "${NVKE_CONTROLLER_NAMESPACE}" ]]; then
   # Same order nvkectl uses: the greenfield namespace if it holds the auth
-  # ConfigMap, else the legacy one. A greenfield site with authentication off
-  # has no ConfigMap, so its Deployment also selects the greenfield namespace.
-  # Only a confirmed absence of both falls back.
-  found="$(
-    "${KUBECTL[@]}" get "configmap/${NVKE_AUTH_CONFIGMAP}" deploy/nke-controller -n nke-controller \
-      --ignore-not-found -o name 2>&1
-  )" || die "cannot look up configmap and deploy nke-controller/nke-controller: ${found}"
+  # ConfigMap, then the one a site installed before the nvke rename keeps, else
+  # the legacy one. A greenfield site with authentication off has no ConfigMap,
+  # so its Deployment also selects the greenfield namespace. Only a confirmed
+  # absence of every candidate falls back.
   NVKE_CONTROLLER_NAMESPACE="cloud-workflow-engine"
-  grep -qxE "configmap/${NVKE_AUTH_CONFIGMAP}|deployment.apps/nke-controller" <<<"${found}" \
-    && NVKE_CONTROLLER_NAMESPACE="nke-controller"
+  ns_denial=""
+  ns_readable=false
+  for candidate in nvke-controller nke-controller; do
+    # --ignore-not-found covers absence, not denial. RBAC scoped to one
+    # namespace answers Forbidden for the other, so keep the denial and try
+    # the rest rather than stopping at it, the way nvkectl's search does.
+    if ! found="$(
+      "${KUBECTL[@]}" get "configmap/${NVKE_AUTH_CONFIGMAP}" "deploy/${candidate}" -n "${candidate}" \
+        --ignore-not-found -o name 2>&1
+    )"; then
+      ns_denial="${ns_denial:-cannot look up configmap and deploy ${candidate}/${candidate}: ${found}}"
+      continue
+    fi
+    ns_readable=true
+    if grep -qxE "configmap/${NVKE_AUTH_CONFIGMAP}|deployment.apps/${candidate}" <<<"${found}"; then
+      NVKE_CONTROLLER_NAMESPACE="${candidate}"
+      break
+    fi
+  done
+  # Falling back needs a confirmed absence. Every candidate denied confirms
+  # nothing, so report the denial rather than guessing the legacy namespace.
+  if [[ "${ns_readable}" == false && -n "${ns_denial}" ]]; then
+    die "${ns_denial}"
+  fi
 fi
 
 # --- audience ---------------------------------------------------------------
 
-# Reads the audience from the live deployment. A token minted for the wrong one
+# Reads the audience from the authentication ConfigMap the live deployment
+# mounts at AUTH_CONFIG_PATH. A token minted for the wrong one
 # is rejected with a 401 that looks identical to sending no token at all.
 #
 # Matching is any-of, so the first entry will do. Handles the flow and block
@@ -98,35 +120,61 @@ cwe_discover_audience() {
       '
 }
 
-# --audience lets other scripts reuse this parser rather than growing a copy.
-if [[ "${1:-}" == "--audience" ]]; then
-  # Checked before use: a command substitution inside an argument list does not
-  # trip set -e, so an empty result would pass through silently.
-  audience="${NKE_AUDIENCE:-$(cwe_discover_audience)}"
-  [[ -n "${audience}" ]] || die "no audience in configmap ${NVKE_CONTROLLER_NAMESPACE}/${NVKE_AUTH_CONFIGMAP}; set NKE_AUDIENCE to override"
-  printf '%s' "${audience}"
-  exit 0
-fi
+# The same, out of the apiAuth section of the controller's settings, which is
+# where a configuration the chart renders lives. The list is indented under the
+# section rather than at the top level. Only a key at the section's own depth
+# matches, so an issuers[].audiences, which nests deeper, never does.
+api_auth_audience() {
+  awk '
+    /^apiAuth:/ { section = 1; next }
+    section && /^[^[:space:]]/ { exit }
+    !section || /^[[:space:]]*(#|$)/ { next }
+    {
+      match($0, /^[[:space:]]*/)
+      if (!depth) depth = RLENGTH
+    }
+    inblock && /^[[:space:]]*-[[:space:]]/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      gsub(/^["'\'']|["'\'']$/, "", line)
+      print line; exit
+    }
+    inblock { inblock = 0 }
+    RLENGTH != depth { next }
+    /^[[:space:]]+audiences:[[:space:]]*\[/ {
+      line = $0
+      sub(/^[^[]*\[[[:space:]]*/, "", line)
+      sub(/[],].*$/, "", line)
+      gsub(/^[[:space:]]*["'\'']|["'\''][[:space:]]*$/, "", line)
+      if (line != "") { print line; exit }
+      next
+    }
+    /^[[:space:]]+audiences:[[:space:]]*$/ { inblock = 1; next }
+  ' <<<"$1"
+}
 
 # --- deployment -------------------------------------------------------------
 
-# A greenfield site installs NVKE as nke-controller; legacy sites still use
+# A greenfield site installs NVKE as nvke-controller, a site installed before
+# the nvke rename as nke-controller; legacy sites still use
 # cloud-workflow-engine. The container shares the Deployment's name
-# in both, which the AUTH_CONFIG_PATH lookup below relies on.
+# in all three, which the AUTH_CONFIG_PATH lookup below relies on.
 # Only a confirmed absence falls back; any other lookup failure is fatal.
 if [[ -z "${NKE_DEPLOYMENT}" ]]; then
   found="$(
-    "${KUBECTL[@]}" get deploy nke-controller -n "${NVKE_CONTROLLER_NAMESPACE}" \
+    "${KUBECTL[@]}" get deploy nvke-controller nke-controller -n "${NVKE_CONTROLLER_NAMESPACE}" \
       --ignore-not-found -o name 2>&1
-  )" || die "cannot look up deploy ${NVKE_CONTROLLER_NAMESPACE}/nke-controller:
+  )" || die "cannot look up deploy nvke-controller or nke-controller in ${NVKE_CONTROLLER_NAMESPACE}:
   ${found}
   Check KUBE_CONTEXT, NVKE_CONTROLLER_NAMESPACE and that this identity may read Deployments,
   or set NKE_DEPLOYMENT."
-  if [[ "${found}" == *"deployment.apps/nke-controller"* ]]; then
-    NKE_DEPLOYMENT="nke-controller"
-  else
-    NKE_DEPLOYMENT="cloud-workflow-engine"
-  fi
+  NKE_DEPLOYMENT="cloud-workflow-engine"
+  for candidate in nvke-controller nke-controller; do
+    if [[ "${found}" == *"deployment.apps/${candidate}"* ]]; then
+      NKE_DEPLOYMENT="${candidate}"
+      break
+    fi
+  done
 fi
 
 # --deployment lets other scripts reuse this lookup, as --audience does above.
@@ -204,15 +252,33 @@ if [[ -z "${auth_config_path}" ]]; then
   ' <<<"${controller_config}")"
 fi
 
+if [[ "${api_auth_enabled}" == "true" ]]; then
+  audience_source="apiAuth in configmap ${NVKE_CONTROLLER_NAMESPACE}/${configmap}"
+  discovered_audience="$(api_auth_audience "${controller_config}")"
+else
+  audience_source="configmap ${NVKE_CONTROLLER_NAMESPACE}/${NVKE_AUTH_CONFIGMAP}"
+  discovered_audience="$(cwe_discover_audience)" || discovered_audience=""
+fi
+
+# --audience lets other scripts reuse this discovery rather than growing a copy.
+if [[ "${1:-}" == "--audience" ]]; then
+  # Checked before use: a command substitution inside an argument list does not
+  # trip set -e, so an empty result would pass through silently.
+  audience="${NKE_AUDIENCE:-${discovered_audience}}"
+  [[ -n "${audience}" ]] || die "no audience in ${audience_source}; set NKE_AUDIENCE to override"
+  printf '%s' "${audience}"
+  exit 0
+fi
+
 if [[ -z "${auth_config_path}" && "${api_auth_enabled}" != "true" ]]; then
   # Authentication is off. No token, no error, no output.
   exit 0
 fi
 
-AUDIENCE="${NKE_AUDIENCE:-$(cwe_discover_audience)}"
+AUDIENCE="${NKE_AUDIENCE:-${discovered_audience}}"
 if [[ -z "${AUDIENCE}" ]]; then
   die "NVKE is authenticating but no audience could be read
-  from configmap ${NVKE_CONTROLLER_NAMESPACE}/${NVKE_AUTH_CONFIGMAP}. Set NKE_AUDIENCE to override."
+  from ${audience_source}. Set NKE_AUDIENCE to override."
 fi
 
 # --- mint -------------------------------------------------------------------

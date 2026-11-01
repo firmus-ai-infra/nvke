@@ -6,7 +6,7 @@ This page lists the failures you are most likely to meet when you install NVIDIA
 
 ### Bootstrap diagnostics
 
-When `nvkectl bootstrap site` fails, it writes diagnostics from the seed cluster to `cluster-diagnostics/`, or to the directory `--diagnostics-dir` names: one directory per namespace with object state and every pod's log (the management plane's under `nke-controller/`), plus `all-resources.txt`, `pods-described.txt` and `helm-releases.txt`.
+When `nvkectl bootstrap site` fails, it writes diagnostics from the seed cluster to `cluster-diagnostics/`, or to the directory `--diagnostics-dir` names: one directory per namespace with object state and every pod's log (the management plane's under `nvke-controller/`), plus `all-resources.txt`, `pods-described.txt` and `helm-releases.txt`.
 
 If the run failed after it requested the cluster, `nvkectl` keeps the seed cluster, and its NVKE API answers on the bootstrap host without authentication. List the management cluster's nodes and the step each one is on:
 
@@ -25,7 +25,7 @@ KIND_EXPERIMENTAL_PROVIDER=nerdctl kind get kubeconfig --name nvkectl-bootstrap 
 Show the warnings and errors from the last hour:
 
 ```bash
-kubectl logs deployment/nke-controller -n nke-controller --since=1h \
+kubectl logs deployment/nvke-controller -n nvke-controller --since=1h \
   | jq -cR 'fromjson? | select(.level == "WARN" or .level == "ERROR")'
 ```
 
@@ -33,10 +33,10 @@ kubectl logs deployment/nke-controller -n nke-controller --since=1h \
 
 ### Inside the management-plane pod
 
-The `nke-controller` image has a busybox shell, so `kubectl exec` works for quick checks. It has `sh`, `wget`, `nc`, `ip`, `netstat`, `ps` and the usual file tools, but no `bash`, `curl`, `nslookup` or `dig`. Read the metrics endpoint from inside the pod:
+The `nvke-controller` image has a busybox shell, so `kubectl exec` works for quick checks. It has `sh`, `wget`, `nc`, `ip`, `netstat`, `ps` and the usual file tools, but no `bash`, `curl`, `nslookup` or `dig`. Read the metrics endpoint from inside the pod:
 
 ```bash
-kubectl exec -n nke-controller deploy/nke-controller -- wget -qO- http://127.0.0.1:9090/metrics
+kubectl exec -n nvke-controller deploy/nvke-controller -- wget -qO- http://127.0.0.1:9090/metrics
 ```
 
 Busybox `wget` does not verify TLS certificates, so do not use it to check an HTTPS endpoint.
@@ -46,30 +46,34 @@ For anything the image does not carry, attach a debug container to the running p
 1. Find the pod name:
 
    ```bash
-   kubectl get pod -n nke-controller -l app.kubernetes.io/name=nke-controller
+   kubectl get pod -n nvke-controller -l app.kubernetes.io/name=nvke-controller
    ```
 
 2. Start a shell in a debug container:
 
    ```bash
-   kubectl debug -it -n nke-controller <POD> --profile=restricted --target=nke-controller --image=<DEBUG_IMAGE> -- sh
+   kubectl debug -it -n nvke-controller <POD> --profile=restricted --target=nvke-controller --image=<DEBUG_IMAGE> -- sh
    ```
 
    Replace `<POD>` with the name from the previous step, and `<DEBUG_IMAGE>` with an image that has the tools you need, such as `curl` and `dig`. `--profile=restricted` runs the debug container without privileges, as the pod runs; without it, a namespace that enforces the `restricted` Pod Security Standard rejects the container.
 
    The debug container runs as the pod's user, uid 65532, with no Linux capabilities, whatever user `<DEBUG_IMAGE>` declares. Choose an image whose tools work as an unprivileged user: `curl`, `dig` and `nslookup` do, while `tcpdump` and anything else that needs root or raw sockets does not.
 
-The debug container stays in the pod's spec, stopped, until the pod is replaced. Starting one needs permission to patch `pods/ephemeralcontainers` in the `nke-controller` namespace.
+The debug container stays in the pod's spec, stopped, until the pod is replaced. Starting one needs permission to patch `pods/ephemeralcontainers` in the `nvke-controller` namespace.
 
 ### Cluster and node state
 
-1. Read the conditions of a cluster that is not `Provisioned`. The `message` of each condition usually names the cause.
+1. Read the cluster's conditions even if its status is `Provisioned`. `Provisioned` is provisioning state, not certificate-maintenance health.
 
    ```bash
    nvkectl get clusters <WORKLOAD_CLUSTER> -o yaml
    ```
 
-   `<WORKLOAD_CLUSTER>` is the workload cluster's name.
+   `<WORKLOAD_CLUSTER>` is the workload cluster's name. Provisioning condition messages usually name the cause. For certificate maintenance, inspect `conditions.certificateRenewal.state`, its `phase` and `message`, and `nextCertRenewalDue`. For etcd key rotation, inspect `conditions.etcdKeyRotation`:
+
+   - A failed renewal that released its mutation lock can still show `Provisioned`. Fix the reported cause; automatic retry waits for both `nextCertRenewalDue` and the one-hour backoff after `conditions.certificateRenewal.completedAt`. A `two-control-plane-voters` refusal also waits for `controlPlaneConfig.desiredCount` of at least `3`; scale to three or more, not down to one.
+   - A failed renewal with `conditions.updateInProgress.type=certificate_renewal` retained its mutation lock. `STATUS` can show `Updating`, but a higher-priority condition such as `UpdateFailed` can mask it; use the renewal and ownership conditions regardless of the displayed status. It cannot retry automatically. Follow the [ownership-checked recovery procedure](../../controller/docs/certificate-renewal.md#status-and-failure-handling), including confirmation that all node-operation attempts have stopped. Do not remove the lock blindly or based only on cluster health or workflow completion.
+   - A failed etcd key rotation with `conditions.updateInProgress.type=etcd_key_rotation` and `conditions.etcdKeyRotation.state=failed` keeps its mutation lock until its workflow is reset and completes. Waiting for `Provisioned` will not clear it, and `UpdateFailed` can mask `Updating`. The lock is also retained when `conditions.etcdKeyRotation.state=running` while the workflow named by `conditions.etcdKeyRotation.workflowID` is no longer open. Follow [phase-aware recovery](../../controller/docs/etcd-encryption-key-rotation.md#phase-aware-recovery).
 
 2. List the cluster's nodes with the step each one is on.
 
@@ -121,7 +125,7 @@ curl -s http://<MANAGEMENT_ADDRESS>:30080/api/version
 ```
 
 ```bash
-kubectl get deployment nke-controller -n nke-controller -o jsonpath='{.spec.template.spec.containers[0].image}'
+kubectl get deployment nvke-controller -n nvke-controller -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
 ## Building artifacts
@@ -299,7 +303,7 @@ The install stops at the component that failed. Fix the cause and run the same c
 |---|---|---|
 | `nvkectl` fails with `minting token for nke-clients/nke-client`. | `nvkectl` uses the management cluster's admin kubeconfig after authentication is configured. | Use an OpenID Connect (OIDC) kubeconfig, as in [With nvkectl](api-authentication.md#with-nvkectl). |
 | `401`, or `403` with `Not admitted: the authenticated identity matches no admission rule.` | Enforcing mode rejected the token or the caller. | Search the management-plane log for `rejected request` in enforcing mode, or `authentication would have rejected this request` in permissive mode, then see [Find callers that enforcing mode would reject](api-authentication.md#find-callers-that-enforcing-mode-would-reject). |
-| The `nke-controller` pod does not become ready, and logs `Failed to set up API authentication`. | In enforcing mode NVKE cannot fetch an issuer's signing keys at startup. | Fix the issuer setting the error names, or return to permissive mode until the log shows `fetched issuer signing keys` for each issuer. |
+| The `nvke-controller` pod does not become ready, and logs `Failed to set up API authentication`. | In enforcing mode NVKE cannot fetch an issuer's signing keys at startup. | Fix the issuer setting the error names, or return to permissive mode until the log shows `fetched issuer signing keys` for each issuer. |
 | A change to `apiAuth.config` has no effect, or authentication is off after you re-run the install. | NVKE reads the configuration only at startup, and the install's values turn authentication off. | See [Switch to enforcing mode](api-authentication.md#switch-to-enforcing-mode). |
 
 ## Creating clusters
@@ -337,8 +341,8 @@ The install stops at the component that failed. Fix the cause and run the same c
 ### A cluster patch fails
 
 - **Symptom:** `nvkectl patch cluster` fails with `409` and `cluster update rejected: <OPERATION> in progress since <TIME>`, or `STATUS` becomes `UpdateFailed`.
-- **Cause:** Only one operation runs on a cluster at a time. `UpdateFailed` means the last day-2 operation failed; its condition message gives the cause.
-- **Fix:** For `409`, wait for `Provisioned`. Then, or for `UpdateFailed`, send the same patch again, as in [Create a workload cluster](../workload-clusters/create.md#change-cluster-settings-after-creation).
+- **Cause:** Only one operation runs on a cluster at a time. `409` can mean an active operation, a failed certificate renewal that retained the mutation lock, or an etcd key rotation that retained the lock (`updateInProgress.type=etcd_key_rotation`): one that failed after `prepare`, or whose workflow closed without recording a failure. `UpdateFailed` means the last day-2 operation failed; its condition message gives the cause.
+- **Fix:** For `409`, read the cluster's YAML and inspect `conditions.updateInProgress`, `conditions.certificateRenewal` and `conditions.etcdKeyRotation`. Wait for `Provisioned` only while the blocking operation is still running. If `updateInProgress.type=certificate_renewal` and `certificateRenewal.state=failed`, waiting will not clear it: follow the [ownership-checked recovery procedure](../../controller/docs/certificate-renewal.md#status-and-failure-handling). Do not clear the lock based only on healthy nodes or workflow completion. If `updateInProgress.type=etcd_key_rotation` and `etcdKeyRotation.state=failed`, or `etcdKeyRotation.state=running` while the workflow named by `etcdKeyRotation.workflowID` is no longer open, the rotation keeps the lock until its workflow is reset and completes: follow [phase-aware recovery](../../controller/docs/etcd-encryption-key-rotation.md#phase-aware-recovery). After the operation finishes or recovery releases its lock, or after fixing the cause of `UpdateFailed`, send the same patch again, as in [Create a workload cluster](../workload-clusters/create.md#change-cluster-settings-after-creation).
 
 ### The cluster stays in Deleting
 

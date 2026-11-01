@@ -120,8 +120,8 @@ else
   fail "item order: ${order}"
 fi
 expect "nktp from the checkout" 'helm upgrade --install nktp .*/nktp/deploy/charts/nktp ' "${out}"
-expect "controller from the checkout" 'helm upgrade --install nke-controller .*/controller/deploy/charts/controller ' "${out}"
-expect "controller in its release.yaml namespace" 'helm upgrade --install nke-controller .* --namespace nke-controller ' "${out}"
+expect "controller from the checkout" 'helm upgrade --install nvke-controller .*/controller/deploy/charts/controller ' "${out}"
+expect "controller in its release.yaml namespace" 'helm upgrade --install nvke-controller .* --namespace nvke-controller ' "${out}"
 expect "postgresql from its OCI repository" 'helm upgrade --install postgres oci://registry-1.docker.io/bitnamicharts/postgresql --version 18.5.15 ' "${out}"
 expect "spire from its index repository" 'helm upgrade --install spire spire --repo https://spiffe.github.io/helm-charts-hardened/ --version 0.30.1 ' "${out}"
 expect "capnico.yaml applied as committed" "kubectl apply --server-side -f ${NICO}/capnico/capnico.yaml" "${out}"
@@ -167,7 +167,7 @@ grep -q 'existingSecret: nvke-database' "${rendered}/postgresql/site-values.yaml
 ! grep -rq 'secret-db-password\|BEGIN' "${rendered}"/*/site-values.yaml && pass "no values file holds a credential" || fail "a values file holds a credential"
 grep -q 'name: site-credentials, type: manifest' "${rendered}/nvke-deploy.yaml" && pass "the render adds the site-credentials item" || fail "item list: $(cat "${rendered}/nvke-deploy.yaml")"
 sed -n '/^items:/,$p' "${rendered}/nvke-deploy.yaml" | sed -n 3p | grep -q 'name: site-credentials' && pass "the site-credentials item follows the first item" || fail "item order: $(cat "${rendered}/nvke-deploy.yaml")"
-grep -q "database-connection-string: $(printf 'postgresql://postgres:secret-db-password@postgres-postgresql.postgres.svc.cluster.local:5432/nke-controller?sslmode=disable' | base64 | tr -d '\n')$" "${rendered}/site-credentials/secrets.yaml" && pass "the Secrets item holds the controller's connection string, base64 in data" || fail "secrets.yaml: $(cat "${rendered}/site-credentials/secrets.yaml")"
+grep -q "database-connection-string: $(printf 'postgresql://postgres:secret-db-password@postgres-postgresql.postgres.svc.cluster.local:5432/nvke-controller?sslmode=disable' | base64 | tr -d '\n')$" "${rendered}/site-credentials/secrets.yaml" && pass "the Secrets item holds the controller's connection string, base64 in data" || fail "secrets.yaml: $(cat "${rendered}/site-credentials/secrets.yaml")"
 grep -q "tls.key: $(base64 <"${WORK}/site/ca.key" | tr -d '\n')$" "${rendered}/site-credentials/secrets.yaml" && grep -q 'namespace: spire-server' "${rendered}/site-credentials/secrets.yaml" && pass "and the SPIRE CA Secret" || fail "secrets.yaml lacks the CA"
 reject "the Secrets use data, not stringData" 'stringData' "$(cat "${rendered}/site-credentials/secrets.yaml")"
 grep -q 'bundle: bundle.crt' "${rendered}/spire/site-values.yaml" && pass "the spire values keep the bundle path on" || fail "spire bundle marker missing"
@@ -188,7 +188,7 @@ expect "the external render holds no credential" "^${WORK}/external holds no cre
 expect "the external render names the database Secret" '^expected in the cluster once its namespace exists and before the item that reads it: Secret postgres/nvke-database with keys password, postgres-password$' "${out}"
 expect "and the NICo Secret" '^expected in the cluster once its namespace exists and before the item that reads it: Secret capnico-system/nico-credentials with keys ' "${out}"
 expect "and the CA Secret" '^expected in the cluster once its namespace exists and before the item that reads it: Secret spire-server/spire-upstream-ca with keys bundle.crt, tls.crt, tls.key$' "${out}"
-expect "the external render shows the connection string shape" '^expected in the cluster once its namespace exists and before the item that reads it: Secret nke-controller/nvke-database with keys database-connection-string, the URL postgresql://postgres:<password>@postgres-postgresql.postgres.svc.cluster.local:5432/nke-controller\?sslmode=disable with the password URL-escaped$' "${out}"
+expect "the external render shows the connection string shape" '^expected in the cluster once its namespace exists and before the item that reads it: Secret nvke-controller/nvke-database with keys database-connection-string, the URL postgresql://postgres:<password>@postgres-postgresql.postgres.svc.cluster.local:5432/nvke-controller\?sslmode=disable with the password URL-escaped$' "${out}"
 [[ ! -e "${WORK}/external/site-credentials" && ! -e "${WORK}/external/nvke-base-config/20-nico-credentials.yaml" && -e "${WORK}/external/nvke-base-config/45-nktp-cluster.yaml" && ! -e "${WORK}/external/.gitignore" ]] && pass "the external tree carries no Secret and no .gitignore" || fail "external tree: $(ls -a "${WORK}/external" "${WORK}/external/nvke-base-config")"
 ! grep -rqF -e "${DEPLOY_DIR}" -e "${WORK}" "${WORK}/external" && pass "the external tree names no path of this machine" || fail "the external tree names a local path: $(grep -rnF -e "${DEPLOY_DIR}" -e "${WORK}" "${WORK}/external" | head -3)"
 grep -q 'path: ../../controller/deploy/charts/controller' "${WORK}/external/controller/release.yaml" && pass "the external tree keeps the committed chart path" || fail "external controller release.yaml: $(cat "${WORK}/external/controller/release.yaml")"
@@ -212,7 +212,7 @@ ca_out="$(STUB_API_DOWN=1 PATH="${stubs}:${PATH}" bash "${EXECUTOR}" install --d
 expect "a dry run reports a probe it could not make" 'cannot probe secret/oidc-provider-upstream-ca in spire-server' "${ca_out}"
 
 out="$(bash "${EXECUTOR}" install --deploy-path "${rendered}" --dry-run 2>&1)" || fail "rendered dry run exited $?"
-expect "the controller takes its site values" "helm upgrade --install nke-controller .*--values ${rendered}/controller/values.yaml --values ${rendered}/controller/overlay.yaml --values ${rendered}/controller/site-values.yaml" "${out}"
+expect "the controller takes its site values" "helm upgrade --install nvke-controller .*--values ${rendered}/controller/values.yaml --values ${rendered}/controller/overlay.yaml --values ${rendered}/controller/site-values.yaml" "${out}"
 expect "spire takes its site values" "helm upgrade --install spire .*--values ${rendered}/spire/site-values.yaml" "${out}"
 expect "the Secrets item is applied before the charts" "^kubectl apply --server-side -f ${rendered}/site-credentials/secrets.yaml" "${out}"
 reject "spire takes no --set-file" 'helm upgrade --install spire .*--set-file' "${out}"
@@ -234,21 +234,21 @@ for f in appdb-override.yaml appdb-override.json appdb-override-flow.yaml appdb-
 done
 expect "the refusal says where appDb is changed" 'change appDb in the deploy path \(for controller, its overlay.yaml\) and run again$' "${appdb_out}"
 appdb_out="$(bash "${EXECUTOR}" install --deploy-path "${rendered}" --dry-run --values-for "controller=${WORK}/image-override.yaml" 2>&1)" || fail "a controller --values-for without appDb exited $?: ${appdb_out}"
-expect "a --values-for file without appDb is still applied" "helm upgrade --install nke-controller .*--values ${WORK}/image-override.yaml" "${appdb_out}"
+expect "a --values-for file without appDb is still applied" "helm upgrade --install nvke-controller .*--values ${WORK}/image-override.yaml" "${appdb_out}"
 # A deploy path the render did not write holds no Secret: the chart builds the
 # connection string from the merged values, so an appDb override is applied.
 mkdir -p "${WORK}/handpath/ctl"
 printf 'items:\n  - {name: ctl, type: helm}\n' >"${WORK}/handpath/nvke-deploy.yaml"
-printf 'chart:\n  name: nke-controller\n  version: "1.0.0"\n  repository: oci://registry.example.test/charts\nrelease:\n  name: nke-controller\n  namespace: nke-controller\n' >"${WORK}/handpath/ctl/release.yaml"
+printf 'chart:\n  name: nvke-controller\n  version: "1.0.0"\n  repository: oci://registry.example.test/charts\nrelease:\n  name: nvke-controller\n  namespace: nvke-controller\n' >"${WORK}/handpath/ctl/release.yaml"
 appdb_out="$(bash "${EXECUTOR}" install --deploy-path "${WORK}/handpath" --dry-run --values-for "ctl=${WORK}/appdb-override.yaml" 2>&1)" || fail "an appDb override on a deploy path with no Secret exited $?: ${appdb_out}"
-expect "an appDb override is applied where the chart reads appDb" "helm upgrade --install nke-controller .*--values ${WORK}/appdb-override.yaml" "${appdb_out}"
+expect "an appDb override is applied where the chart reads appDb" "helm upgrade --install nvke-controller .*--values ${WORK}/appdb-override.yaml" "${appdb_out}"
 ! grep -q 'BEGIN' "${rendered}/spire/site-values.yaml" && pass "the CA is not copied into the spire values" || fail "spire site values hold PEM"
 expect "the rendered Secret is applied as a manifest" "^kubectl apply --server-side -f ${rendered}/nvke-base-config/20-nico-credentials.yaml" "${out}"
 expect "the namespaces manifest is applied too" "^kubectl apply --server-side -f ${rendered}/nvke-base-config/00-namespaces.yaml" "${out}"
 reject "no python template render for a rendered path" 'render-template' "${out}"
 expect "postgresql still comes from its public repository" 'helm upgrade --install postgres oci://registry-1.docker.io/bitnamicharts/postgresql --version 18.5.15 ' "${out}"
 expect "a committed chart path is absolute in the rendered tree, so it resolves from anywhere" "helm upgrade --install nktp ${REPO}/nktp/deploy/charts/nktp " "${out}"
-expect "the controller chart too" "helm upgrade --install nke-controller ${REPO}/controller/deploy/charts/controller " "${out}"
+expect "the controller chart too" "helm upgrade --install nvke-controller ${REPO}/controller/deploy/charts/controller " "${out}"
 # A secret that cannot be written into a quoted YAML value is refused.
 out="$(NVKECTL_NICO_TOKEN='tok"en' "${NVKECTL}" render deploy-path --deploy-path "${NICO}" --sitespec "${SITESPEC}" --stack-config "${STACK}" --arch linux/arm64 --out "${WORK}/bad-rendered" 2>&1)" && fail "a quote in a token exited 0"
 expect "the unescapable token is refused by variable" 'NVKECTL_NICO_TOKEN: the value holds a character the templates cannot carry' "${out}"
@@ -330,7 +330,7 @@ expect "temporal installed from the archive" "helm upgrade --install temporal ${
 reject "no dependency build for an archive" 'helm dependency build .*temporal' "${out}"
 expect "postgresql still comes from its public repository" 'helm upgrade --install postgres oci://registry-1.docker.io/bitnamicharts/postgresql --version 18.5.15 ' "${out}"
 expect "nktp still comes from the checkout" 'helm upgrade --install nktp .*/nktp/deploy/charts/nktp ' "${out}"
-expect "the controller takes its images from release-images.yaml" "helm upgrade --install nke-controller .*/controller/deploy/charts/controller .*--values ${rendered}/controller/release-images.yaml" "${out}"
+expect "the controller takes its images from release-images.yaml" "helm upgrade --install nvke-controller .*/controller/deploy/charts/controller .*--values ${rendered}/controller/release-images.yaml" "${out}"
 grep -q "repository: \"nvkr.local/nvke/cwe\"" "${rendered}/controller/release-images.yaml" && pass "release-images.yaml carries the cwe repository" || fail "release-images.yaml"
 grep -q "digest: \"${d_profiles}\"" "${rendered}/controller/release-images.yaml" && pass "and the profiles digest" || fail "profiles digest"
 expect "capnico is applied through a kustomization" "^kubectl kustomize ${rendered}/capnico" "${out}"
@@ -386,7 +386,7 @@ renders="${state}/renders"
 out="$(PATH="${stubs}:${PATH}" NVKE_STATE_DIR="${state}" bash "${EXECUTOR}" install --deploy-path "${NICO}" --sitespec "${SITESPEC}" --stack-config "${STACK}" --arch linux/arm64 --dry-run 2>&1)" || fail "wrapped render dry run exited $?: ${out}"
 expect "the executor logs the inputs before it renders" "^=== inputs: site spec ${SITESPEC}, site nvke-site, stack config ${STACK}, nico https://nico.example.com org org-1$" "${out}"
 expect "the executor renders before installing" "^=== rendering ${NICO}$" "${out}"
-expect "and installs the rendered tree" "helm upgrade --install nke-controller .*--values ${renders}/install\.[A-Za-z0-9]+/rendered/controller/site-values.yaml" "${out}"
+expect "and installs the rendered tree" "helm upgrade --install nvke-controller .*--values ${renders}/install\.[A-Za-z0-9]+/rendered/controller/site-values.yaml" "${out}"
 [[ -z "$(ls -A "${renders}" 2>/dev/null)" ]] && pass "the scratch render is removed when the install ends" || fail "scratch left: $(ls -A "${renders}")"
 find "${state}" -maxdepth 0 -perm 0700 | grep -q . && pass "the state directory is private" || fail "state directory mode"
 out="$(PATH="${stubs}:${PATH}" NVKE_STATE_DIR="${state}" bash "${EXECUTOR}" install --deploy-path "${NICO}" --sitespec "${SITESPEC}" --stack-config "${STACK}" --arch linux/arm64 --release "${HERE}/nvkr-release/bad-schema.json" --dry-run 2>&1)" && fail "failed render exited 0"
@@ -550,7 +550,25 @@ LOCAL_DEPLOY="${DEPLOY_DIR}/nvke-deploy-local.sh"
 lstubs="${WORK}/local-site-stubs"
 mkdir -p "${lstubs}"
 printf '#!/usr/bin/env bash\n[[ -z "${STUB_LOG:-}" ]] || printf "%%s\\n" "nerdctl $*" >>"${STUB_LOG}"\ncase "$*" in *inspect*) exit 1 ;; esac\nexit 0\n' >"${lstubs}/nerdctl"
-printf '#!/usr/bin/env bash\n[[ -z "${STUB_LOG:-}" ]] || printf "%%s\\n" "docker $*" >>"${STUB_LOG}"\ncase "$*" in *"network inspect"*) exit 1 ;; esac\nexit 0\n' >"${lstubs}/docker"
+# docker ps answers node-<id> for each instance id in STUB_DOCKER_NODES that
+# its filter names, as Docker would for a node with that instance label.
+cat >"${lstubs}/docker" <<'STUB'
+#!/usr/bin/env bash
+[[ -z "${STUB_LOG:-}" ]] || printf '%s\n' "docker $*" >>"${STUB_LOG}"
+case "$*" in
+  *"network inspect"*) exit 1 ;;
+  "ps "*)
+    [[ -z "${STUB_DOCKER_PS_FAIL:-}" ]] || exit 1
+    for arg in "$@"; do
+      [[ "${arg}" == label=nvidia.com/nico-containers.instance-id=* ]] || continue
+      for node in ${STUB_DOCKER_NODES:-}; do
+        [[ "${node}" != "${arg#*instance-id=}" ]] || printf 'node-%s\n' "${node}"
+      done
+    done
+    ;;
+esac
+exit 0
+STUB
 printf '#!/usr/bin/env bash\n[[ -z "${STUB_LOG:-}" ]] || printf "%%s\\n" "kubectl $*" >>"${STUB_LOG}"\nexit 1\n' >"${lstubs}/kubectl"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${lstubs}/iptables"
 printf '#!/usr/bin/env bash\n[[ -z "${STUB_LOG:-}" ]] || printf "%%s\\n" "ip $*" >>"${STUB_LOG}"\nexit 1\n' >"${lstubs}/ip"
@@ -587,6 +605,36 @@ rm -rf "${WORK}/local-site"
 mkdir -p "${WORK}/local-site/releases" && : >"${WORK}/local-site/.local-site"
 out="$(lsite down)" || fail "down on a half-finished workspace exited $?: ${out}"
 [[ ! -e "${WORK}/local-site" ]] && pass "down removes a workspace the setup started" || fail "half-finished workspace left"
+# down removes the tenant nodes this workspace's nico-sim created, by the
+# instance ids in its database, not every node of the seeded site.
+if command -v python3 >/dev/null 2>&1; then
+  instance_id=7f3c9a2e-4b1d-4e8a-9c6f-2d5e8b1a0c47
+  mkdir -p "${WORK}/local-site" && : >"${WORK}/local-site/.local-site"
+  python3 -c 'import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE instances (id TEXT PRIMARY KEY)"); c.execute("INSERT INTO instances VALUES (?)", (sys.argv[2],)); c.commit()' "${WORK}/local-site/.nico-sim.db" "${instance_id}"
+  # Another nico-sim's node on the same Docker daemon, which down must keep.
+  decoy_id=0b8e4d1f-6a2c-4f3e-8d7b-5c9a1e2f3d64
+  : >"${WORK}/local-site.log"
+  out="$(STUB_LOG="${WORK}/local-site.log" STUB_DOCKER_NODES="${instance_id} ${decoy_id}" lsite down)" || fail "down on a workspace with a nico-sim database exited $?: ${out}"
+  expect "down looks up this nico-sim's instances by id" "^docker ps .*label=nvidia\\.com/nico-containers\\.instance-id=${instance_id}\$" "$(cat "${WORK}/local-site.log")"
+  reject "down does not select by the shared seeded site" 'nico-containers\.site-id' "$(cat "${WORK}/local-site.log")"
+  expect "down removes the node it found, with its volumes" "^docker rm -f -v node-${instance_id}\$" "$(cat "${WORK}/local-site.log")"
+  reject "down keeps another nico-sim's node" "${decoy_id}" "$(cat "${WORK}/local-site.log")"
+  [[ ! -e "${WORK}/local-site" ]] && pass "down removes a workspace with a nico-sim database" || fail "workspace with a nico-sim database left"
+  # The database is the only record of those nodes: when it cannot be read,
+  # or Docker cannot list them, down stops and keeps the workspace.
+  mkdir -p "${WORK}/local-site" && : >"${WORK}/local-site/.local-site"
+  printf 'not a database\n' >"${WORK}/local-site/.nico-sim.db"
+  out="$(lsite down)" && fail "down on an unreadable nico-sim database exited 0"
+  expect "down says it cannot find the tenant nodes" 'cannot tell which tenant nodes are this workspace' "${out}"
+  [[ -f "${WORK}/local-site/.nico-sim.db" ]] && pass "down keeps a workspace whose database it cannot read" || fail "workspace with an unreadable database removed"
+  rm -rf "${WORK}/local-site"
+  mkdir -p "${WORK}/local-site" && : >"${WORK}/local-site/.local-site"
+  python3 -c 'import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE instances (id TEXT PRIMARY KEY)"); c.execute("INSERT INTO instances VALUES (?)", (sys.argv[2],)); c.commit()' "${WORK}/local-site/.nico-sim.db" "${instance_id}"
+  out="$(STUB_DOCKER_PS_FAIL=1 lsite down)" && fail "down with a failing docker ps exited 0"
+  expect "down says it cannot list the tenant nodes" 'cannot list the tenant nodes in Docker' "${out}"
+  [[ -f "${WORK}/local-site/.nico-sim.db" ]] && pass "down keeps the workspace when Docker cannot list the tenant nodes" || fail "workspace removed after a failing docker ps"
+  rm -rf "${WORK}/local-site"
+fi
 if [[ "$(uname -s)" != Linux || "$(id -u)" != 0 ]]; then
   out="$(lsite setup)" && fail "local-site.sh setup off Linux or without root exited 0"
   expect "setup names what it needs" '^local-site: run as root|^local-site: run this inside the Colima machine' "${out}"
