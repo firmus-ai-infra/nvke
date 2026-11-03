@@ -516,12 +516,14 @@ jobs:
     # took `forge` would read them as empty, and an unset identifier skips the
     # site rather than failing, so the lane would report "no declared site
     # offers" -- a missing variable wearing the costume of missing hardware.
-    # The scope the plan resolved, not a second derivation of it: the env
-    # context is unavailable here but `needs` is, and re-deriving drops
-    # SCOPE's own precedence -- a push ignores QUALIFY_E2E_SCOPE and the l40s
-    # label outranks it, so either would attach `dsx` to a Forge run.
+    # The stream's own provider, not the scope it arrived in. A scope is
+    # single-provider only by convention, and release/policy.yaml invites the
+    # `full` selector to come off now that a DSX tenant spec exists -- the day
+    # it does, scope is `full` and every dsx leg takes `forge`. `matrix` is
+    # available in a job-level `environment`, and matrix.provider is already
+    # what the env block below keys PROVIDER off.
     environment: >-
-      ${{ (needs.plan.outputs.scope == 'dsx' && 'dsx')
+      ${{ (matrix.provider == 'dsx' && 'dsx')
           || (github.event_name == 'push' && 'forge-nightly')
           || 'forge' }}
     # Composed of two budgets that used to be separate jobs: up to 90 minutes
@@ -1148,27 +1150,24 @@ jobs:
       # that has no release to download from.
       - name: Set up ORAS
         if: env.SITE_CLI_REF != ''
-        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+        uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
         with:
           version: ${{ steps.oras.outputs.version }}
 
-      # nvke-controller is the name everywhere now, but GHCR keeps releases from
-      # before the rename under nke-controller. Probed here, after the logins,
-      # because the GHCR package is private. site-inputs and the e2e config
-      # both read the result, which is what keeps the name on the node's
-      # archive and the name the Helm values ask for the same.
+      # nvke-controller is the only name on GHCR; images under nke-controller
+      # are gone, so a release from before the rename cannot be pulled from
+      # GHCR. Probed here so a missing tag fails before a machine is taken.
+      # site-inputs and the e2e config both read the result, which is what
+      # keeps the name on the node's archive and the name the Helm values ask
+      # for the same.
       - name: Resolve the controller image name
         shell: bash
         run: |
           set -Eeuo pipefail
           repository=nvke-controller
           if [ "${SITE_NVKE_CONTROLLER_BUILD}" != 1 ] && [ "${SITE_IMAGE_REGISTRY}" = ghcr ]; then
-            if docker manifest inspect "${SITE_IMAGES}/nvke-controller:${SITE_NVKE_CONTROLLER_VERSION}" >/dev/null 2>&1; then
-              :
-            elif docker manifest inspect "${SITE_IMAGES}/nke-controller:${SITE_NVKE_CONTROLLER_VERSION}" >/dev/null 2>&1; then
-              repository=nke-controller
-            else
-              echo "::error::${SITE_NVKE_CONTROLLER_VERSION} is on GHCR as neither nvke-controller nor nke-controller"
+            if ! docker manifest inspect "${SITE_IMAGES}/nvke-controller:${SITE_NVKE_CONTROLLER_VERSION}" >/dev/null 2>&1; then
+              echo "::error::${SITE_IMAGES}/nvke-controller:${SITE_NVKE_CONTROLLER_VERSION} is not on GHCR"
               exit 1
             fi
           fi
@@ -1777,7 +1776,10 @@ jobs:
               value="$(printf '%s' "${form}" | sed 's/[][\.*^$/]/\\&/g')"
               for f in qualify-e2e.log qualify-e2e.junit.xml tenant-diagnostics.json site-cluster-state.txt; do
                 [ -f "${f}" ] || continue
-                sed -i "s/${value}/<withheld>/g" "${f}"
+                # No < or >: in qualify-e2e.junit.xml they would make the
+                # report invalid XML, which neither `qualify publish` nor
+                # TestGrid can read.
+                sed -i "s/${value}/[withheld]/g" "${f}"
               done
             done
           done < <(compgen -v | grep -E '_JUMP_HOST$|^SSA_ISSUER$' || true)

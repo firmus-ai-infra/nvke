@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	temporalclient "go.temporal.io/sdk/client"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,6 +35,19 @@ type reconciler struct {
 	// passes the specific capability each downstream function needs, rather
 	// than each one resolving its own.
 	providerClient func(db.Cluster) (clients.ProviderClient, error)
+
+	// requeue is the soonest check-back a step asked for while waiting on
+	// something that does not write to the DB (a Temporal workflow). Zero means
+	// none; the DB sources and resync drive the next reconcile.
+	requeue time.Duration
+}
+
+// requeueAfter asks for the cluster to be reconciled again within d. The
+// soonest request in one reconcile wins.
+func (r *reconciler) requeueAfter(d time.Duration) {
+	if d > 0 && (r.requeue == 0 || d < r.requeue) {
+		r.requeue = d
+	}
 }
 
 func newReconciler(
@@ -128,6 +142,23 @@ func (r *reconciler) reconcile(ctx context.Context, cluster db.Cluster) error {
 			return fmt.Errorf("reconciling control plane joins: %w", err)
 		}
 		if joinInFlight {
+			return nil
+		}
+
+		// Steady-state rebalance: surge a more-preferred replacement (gated and one
+		// at a time), grow-before-shrink, then shed the old node itself once the
+		// surge joins. Lowest priority: it yields to the upgrade and rollout steps
+		// above by abandoning an in-flight surge.
+		rebalanceActed, err := r.reconcileControlPlaneRebalance(ctx, cluster, controlPlane, allocator, provider.NewNodeProvider())
+		if err != nil {
+			return fmt.Errorf("reconciling control plane rebalance: %w", err)
+		}
+		// A rebalance that grew, shed or abandoned owns this pass: it already made
+		// its one grow-before-shrink change, so return before scale-down (or any
+		// later membership step) can act on the same slots off the pre-rebalance
+		// snapshot. A recorded shed is promoted to a teardown on the next reconcile,
+		// which the fresh snapshot and one-at-a-time promotion drain normally.
+		if rebalanceActed {
 			return nil
 		}
 	}

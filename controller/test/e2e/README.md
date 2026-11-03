@@ -442,8 +442,8 @@ Results go to `/artifacts`, which the runner mounts:
 
 | File | Contents |
 | --- | --- |
-| `junit-test-report.xml` | The selected specs only (`-e2e.junit-report`). Ginkgo's own JUnit report lists every spec the filter left out as skipped. |
-| `report.json` | Ginkgo's JSON report, every spec. Its report entries record the inputs each validation resolved and, for a tenant, the cluster ID and API server it reached, never the credential. |
+| `junit-test-report.xml` | The selected specs only (`-e2e.junit-report`). Ginkgo's own JUnit report lists every spec the filter left out as skipped. A spec that failed on a Gomega assertion about an error carries that error's text as a `failure-cause` property, JSON-encoded and cut at a word to at most 4 KiB. |
+| `report.json` | Ginkgo's JSON report, every spec. Its report entries record the inputs each validation resolved and, for a tenant, the cluster ID and API server it reached, never the credential; a spec that failed on a Gomega assertion about an error also records that error's text, which its failure message already carries. |
 
 A failure says why where the cluster records it: a pod that never ran gives
 its scheduling condition, each container's waiting reason and its latest
@@ -863,7 +863,7 @@ Stage amd64 OS images to match:
 
 ```bash
 go test -timeout 5h . -args \
-  -ginkgo.label-filter=site-controller -ginkgo.v \
+  -ginkgo.label-filter="site-controller && !nico-forge" -ginkgo.v \
   -e2e.config=e2e-config.yaml -e2e.environment=dsx -e2e.site-stage=provision \
   -e2e.capabilities=arch=amd64 \
   -e2e.versions=controller=<…>,os-image=<amd64 url>,os-image-bootloader=<amd64 url>,…

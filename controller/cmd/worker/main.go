@@ -29,12 +29,14 @@ import (
 	"github.com/dsx-ai-factory/nvke/controller/internal/config"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllerconfig"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/automode"
+	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/bootstrap"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/capi"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/certificates"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/certrenewal"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/controlplane"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/controlplanenodescheduler"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/dbreconcile/dbwrapper"
+	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/machineannotations"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/nodeagentreadiness"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/nodepool"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/nodepoolnodescheduler"
@@ -66,7 +68,7 @@ const (
 	ServerGracefulShutdownTimeout = 30 * time.Second
 )
 
-//nolint:gocyclo,maintidx // This isn't real complexity, it's just a lot of "exit if error"
+//nolint:gocyclo,maintidx,funlen // This isn't real complexity, it's just a lot of "exit if error"
 func main() {
 	// Before ParseConfigFromEnv, so --version answers without a configured env.
 	versionFlag := flag.Bool("version", false, "Print the version and exit")
@@ -310,6 +312,7 @@ func main() {
 	logger.Info("Kubernetes controller-runtime manager configuration",
 		"enableNodeProvisioningMonitor", enableNodeProvisioningMonitor,
 		"enableNicoControllers", cfg.NicoControllersEnabled,
+		"enableBootstrapControllers", cfg.BootstrapControllersEnabled,
 		"enableSpiffe", cfg.SpiffeEnabled,
 		"enableTenantAccess", cfg.TenantAccessEnabled)
 
@@ -327,12 +330,24 @@ func main() {
 	machineSpireEntryController := capi.NewMachineSpireEntryController(
 		cfg,
 		k8sControllerManager.GetClient(),
-		dbInstance,
 		logger.With("logger", "machine-spire-entry-controller"),
 		trustDomain,
 	)
 	if err := machineSpireEntryController.SetupWithManager(k8sControllerManager); err != nil {
 		logger.Error("Failed to set up machine SPIRE entry controller", "error", err)
+		os.Exit(1)
+	}
+
+	// Sets agent-connection on Machines created before the controller wrote it,
+	// which MachineSpireEntryController waits for.
+	machineAnnotationsController := machineannotations.NewController(
+		cfg,
+		logger.With("logger", "machine-annotations-controller"),
+		dbInstance,
+		k8sControllerManager.GetClient(),
+	)
+	if err := machineAnnotationsController.SetupWithManager(k8sControllerManager); err != nil {
+		logger.Error("Failed to set up machine annotations controller", "error", err)
 		os.Exit(1)
 	}
 
@@ -348,7 +363,6 @@ func main() {
 	}
 	if launchLayerCRDInstalled {
 		launchLayerSpiffeController := capi.NewLaunchLayerSpiffeController(
-			dbInstance,
 			k8sControllerManager.GetClient(),
 			logger.With("logger", "launchlayer-spiffe-controller"),
 		)
@@ -373,7 +387,6 @@ func main() {
 
 		nicoSpiffeController := capi.NewNicoSpiffeController(
 			cfg,
-			dbInstance,
 			k8sControllerManager.GetClient(),
 			logger.With("logger", "nico-spiffe-controller"),
 		)
@@ -394,6 +407,20 @@ func main() {
 		}
 	} else {
 		logger.Info("NICo controllers disabled by configuration")
+	}
+
+	if cfg.BootstrapControllersEnabled {
+		kubeadmConfigCRDInstalled, err := bootstrap.KubeadmConfigCRDInstalled(k8sControllerManager.GetRESTMapper())
+		if err != nil {
+			logger.Error("Failed to look up the KubeadmConfig CRD", "error", err)
+			os.Exit(1)
+		}
+		if !kubeadmConfigCRDInstalled {
+			logger.Error("Required KubeadmConfig CRD is not installed while bootstrap controllers are enabled; install Cluster API before starting the NVKE controller")
+			os.Exit(1)
+		}
+	} else {
+		logger.Info("Bootstrap controllers disabled by configuration")
 	}
 
 	var teleportClient teleport.Client

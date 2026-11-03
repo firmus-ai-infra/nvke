@@ -532,7 +532,7 @@ func TestTeardownNodeForceUnreachableContinuesAfterDrainFailure(t *testing.T) {
 	})
 
 	env, _ := setupWorkflowEnv(t, database, res.profilesDir, workflowEnvOpts{
-		failDrainActivity: true,
+		drainErr: errors.New("eviction blocked by PodDisruptionBudget"),
 	})
 
 	env.ExecuteWorkflow(TeardownNode, TeardownNodeInput{
@@ -564,6 +564,44 @@ func TestTeardownNodeForceUnreachableContinuesAfterGracefulShutdownFailure(t *te
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
+}
+
+// A control-plane rebalance surge can be recorded and then fail to provision,
+// so it never joins: there is no kube-apiserver or etcd on it to stop and no
+// agent to receive the graceful-shutdown RPC. Teardown must skip graceful
+// shutdown -- otherwise it dials an agent that never existed and loops, wedging
+// every later control-plane reconcile -- while still removing any etcd
+// membership and deleting the node.
+func TestTeardownNodeSkipsGracefulShutdownWhenCPNeverJoined(t *testing.T) {
+	database, res := setupTestDB(t, seedOpts{
+		clusterProvisioned:  true,
+		cpNodeJoined:        true, // a surviving joined CP peer exists
+		targetCPNeverJoined: true, // the surge under teardown never joined
+		omitConfigProfile:   true,
+	})
+
+	env, _ := setupWorkflowEnv(t, database, res.profilesDir, workflowEnvOpts{})
+
+	var activityNames []string
+	env.SetOnActivityStartedListener(func(activityInfo *activity.Info, _ context.Context, _ converter.EncodedValues) {
+		activityNames = append(activityNames, activityInfo.ActivityType.Name)
+	})
+
+	env.ExecuteWorkflow(TeardownNode, TeardownNodeInput{
+		NodeID:      res.nodeID,
+		AllowCPNode: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.NotContains(t, activityNames, "StartControlPlaneGracefulShutdown",
+		"graceful shutdown must be skipped for a control-plane node that never joined")
+	require.Contains(t, activityNames, "RemoveEtcdMember",
+		"etcd member removal still runs and is a no-op when the member is absent")
+	require.Contains(t, activityNames, "DeleteCAPIMachineForNode")
+
+	_, err := database.GetNode(context.Background(), res.nodeID)
+	require.ErrorIs(t, err, db.ErrNotFound, "the surge node record must be deleted once teardown completes")
 }
 
 func TestTeardownNodeWorkerPoolSkipsEtcdRemoval(t *testing.T) {
@@ -705,6 +743,7 @@ type seedOpts struct {
 	clusterProvisioned        bool
 	cpNodeJoined              bool
 	onlyJoinedCPUnderTeardown bool // primary node is the sole joined CP; no surviving peer
+	targetCPNeverJoined       bool // the CP node under teardown never joined (e.g. a failed rebalance surge)
 	survivingCPDeleting       bool // the peer CP is joined but is itself being torn down
 	clusterDeleting           bool // cluster is being torn down, whatever the workflow input says
 	workerNodePool            bool
@@ -831,7 +870,12 @@ func setupTestDB(t *testing.T, opts seedOpts) (db.DB, seedResult) {
 
 	nodeID := uuid.New()
 	nodeConditions := db.NodeConditions{}
-	if opts.onlyJoinedCPUnderTeardown {
+	// A control-plane node under normal teardown has joined; model that so the
+	// graceful-shutdown step runs against it. onlyJoinedCPUnderTeardown is the
+	// sole-joined-CP case (still joined), while targetCPNeverJoined models a
+	// rebalance surge that was recorded but never joined, so graceful shutdown
+	// must be skipped.
+	if (opts.onlyJoinedCPUnderTeardown || opts.cpNodeJoined) && !opts.targetCPNeverJoined {
 		nodeConditions.Joined = db.NewCondition(true, "Joined")
 	}
 	node := db.Node{
@@ -874,7 +918,6 @@ func setupTestDB(t *testing.T, opts seedOpts) (db.DB, seedResult) {
 }
 
 type workflowEnvOpts struct {
-	failDrainActivity         bool
 	failGracefulShutdownStart bool
 	deleteKubeNodeErr         error
 	kubeadmResetErr           error
@@ -882,6 +925,8 @@ type workflowEnvOpts struct {
 	omitClusterRunbookMock    bool
 	omitKubeadmResetMock      bool
 	omitDeleteCAPIMachineMock bool
+	omitDrainMock             bool
+	drainErr                  error
 }
 
 func setupWorkflowEnv(t *testing.T, database db.DB, profilesDir string, opts workflowEnvOpts) (*testsuite.TestWorkflowEnvironment, *activities.Activities) {
@@ -905,11 +950,9 @@ func setupWorkflowEnv(t *testing.T, database db.DB, profilesDir string, opts wor
 
 	// Mock external activities and workflow operations
 	env.OnActivity(a.LabelNode, mock.Anything, mock.Anything).Return(activities.LabelNodeResult{}, nil).Maybe()
-	drainErr := error(nil)
-	if opts.failDrainActivity {
-		drainErr = errors.New("eviction blocked by PodDisruptionBudget")
+	if !opts.omitDrainMock {
+		env.OnActivity(a.DrainKubeNode, mock.Anything, mock.Anything).Return(opts.drainErr).Maybe()
 	}
-	env.OnActivity(a.DrainKubeNode, mock.Anything, mock.Anything).Return(drainErr).Maybe()
 	env.OnActivity(a.DeleteKubeNode, mock.Anything, mock.Anything).Return(opts.deleteKubeNodeErr).Maybe()
 	env.OnActivity(a.RemoveEtcdMember, mock.Anything, mock.Anything).Return(nil).Maybe()
 	if !opts.omitClusterRunbookMock {
@@ -987,12 +1030,23 @@ func TestClusterTeardownDeletesInfrastructureWhenAgentResetFails(t *testing.T) {
 
 func TestNodeDeletionStopsOnCleanupFailureWithoutForceUnreachable(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		opts      workflowEnvOpts
-		wantError string
+		name              string
+		opts              workflowEnvOpts
+		wantError         string
+		wantDrainAttempts int
 	}{
-		{name: "PDB blocks drain", opts: workflowEnvOpts{failDrainActivity: true}, wantError: "PodDisruptionBudget"},
-		{name: "agent cannot shut down gracefully", opts: workflowEnvOpts{failGracefulShutdownStart: true}, wantError: "apiserver stuck"},
+		{
+			name:              "agent cannot shut down gracefully",
+			opts:              workflowEnvOpts{failGracefulShutdownStart: true},
+			wantError:         "apiserver stuck",
+			wantDrainAttempts: 1,
+		},
+		{
+			name:              "drain fails with a non-retryable error",
+			opts:              workflowEnvOpts{drainErr: temporal.NewNonRetryableApplicationError("node not found in database", "db.ErrNotFound", nil)},
+			wantError:         "node not found in database",
+			wantDrainAttempts: 1,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			database, res := setupTestDB(t, seedOpts{clusterProvisioned: true, cpNodeJoined: true, omitConfigProfile: true})
@@ -1005,8 +1059,110 @@ func TestNodeDeletionStopsOnCleanupFailureWithoutForceUnreachable(t *testing.T) 
 			require.True(t, env.IsWorkflowCompleted())
 			require.ErrorContains(t, env.GetWorkflowError(), test.wantError)
 			require.NotContains(t, activityNames, "DeleteCAPIMachineForNode")
+			drainAttempts := 0
+			for _, name := range activityNames {
+				if name == "DrainKubeNode" {
+					drainAttempts++
+				}
+			}
+			require.Equal(t, test.wantDrainAttempts, drainAttempts)
 			_, err := database.GetNode(t.Context(), res.nodeID)
 			require.NoError(t, err, "failed graceful cleanup must retain the node")
+		})
+	}
+}
+
+func TestDrainActivityOptions(t *testing.T) {
+	for _, test := range []struct {
+		name                string
+		forceDrainOnFailure bool
+		wantMaxAttempts     int32
+	}{
+		{name: "drain that cannot force-delete pods retries with no limit", wantMaxAttempts: 0},
+		{name: "drain that can force-delete pods has a limit", forceDrainOnFailure: true, wantMaxAttempts: forceDrainMaxAttempts},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := drainActivityOptions(test.forceDrainOnFailure)
+			require.Equal(t, test.wantMaxAttempts, options.RetryPolicy.MaximumAttempts)
+			require.Zero(t, options.ScheduleToCloseTimeout)
+			// The 100 s drain of each attempt must fit in StartToClose.
+			require.Equal(t, 3*time.Minute, options.StartToCloseTimeout)
+			require.Equal(t, time.Minute, options.HeartbeatTimeout)
+			require.Equal(t, time.Minute, options.RetryPolicy.InitialInterval)
+			require.Equal(t, 5*time.Minute, options.RetryPolicy.MaximumInterval)
+		})
+	}
+}
+
+func TestTeardownNodeDrainRetryBudget(t *testing.T) {
+	// The value is more than forceDrainMaxAttempts and less than 10. The Temporal
+	// test environment changes an unlimited retry policy to 10 attempts.
+	const blockedDrains = 6
+
+	for _, test := range []struct {
+		name             string
+		workerNodePool   bool
+		forceUnreachable bool
+		wantDrains       int
+		wantForceDrain   bool
+		wantError        string
+	}{
+		{
+			name:       "control-plane drain retries until the PodDisruptionBudget allows the eviction",
+			wantDrains: blockedDrains + 1,
+		},
+		{
+			name:             "force-unreachable control-plane drain gives up and the teardown continues",
+			forceUnreachable: true,
+			wantDrains:       forceDrainMaxAttempts,
+			wantForceDrain:   true,
+		},
+		{
+			name:           "worker drain gives up and the teardown fails",
+			workerNodePool: true,
+			wantDrains:     forceDrainMaxAttempts,
+			wantForceDrain: true,
+			wantError:      "failed to drain node",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			database, res := setupTestDB(t, seedOpts{
+				clusterProvisioned: true,
+				cpNodeJoined:       true,
+				workerNodePool:     test.workerNodePool,
+				omitConfigProfile:  true,
+			})
+			env, a := setupWorkflowEnv(t, database, res.profilesDir, workflowEnvOpts{omitDrainMock: true})
+			env.OnActivity(a.DrainKubeNode, mock.Anything, mock.Anything).
+				Return(errors.New("eviction blocked by PodDisruptionBudget")).Times(blockedDrains)
+			env.OnActivity(a.DrainKubeNode, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			var drainInputs []activities.DrainKubeNodeInput
+			env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, args converter.EncodedValues) {
+				if info.ActivityType.Name != "DrainKubeNode" {
+					return
+				}
+				var input activities.DrainKubeNodeInput
+				require.NoError(t, args.Get(&input))
+				drainInputs = append(drainInputs, input)
+			})
+
+			env.ExecuteWorkflow(TeardownNode, TeardownNodeInput{
+				NodeID:           res.nodeID,
+				AllowCPNode:      true,
+				ForceUnreachable: test.forceUnreachable,
+			})
+
+			require.True(t, env.IsWorkflowCompleted())
+			if test.wantError != "" {
+				require.ErrorContains(t, env.GetWorkflowError(), test.wantError)
+			} else {
+				require.NoError(t, env.GetWorkflowError())
+			}
+			require.Len(t, drainInputs, test.wantDrains)
+			for _, input := range drainInputs {
+				require.Equal(t, test.wantForceDrain, input.ForceDrainOnFailure)
+			}
 		})
 	}
 }
