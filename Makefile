@@ -118,8 +118,7 @@ RELEASE_LDFLAGS ?= -s -w -buildid= -extldflags -static
 
 # Must match WORKER_BIN_NAME in controller/Makefile. `build` fails if it does not.
 # NVKE_CONTROLLER_BIN_NAME overrides it. An empty value counts as unset.
-# NKE_CONTROLLER_BIN_NAME and CWE_BIN_NAME are deprecated aliases for NVKE_CONTROLLER_BIN_NAME; #1399 removes them.
-controller_bin_name = $(or $(NVKE_CONTROLLER_BIN_NAME),$(NKE_CONTROLLER_BIN_NAME),$(CWE_BIN_NAME),controller)
+controller_bin_name = $(or $(NVKE_CONTROLLER_BIN_NAME),controller)
 
 # No module is excluded from the workspace any more; kept (empty) because
 # work-check accounts for every go.mod in the tree against these two lists.
@@ -756,7 +755,20 @@ secrets-check: ## Scan the commits on this branch for credentials, as the secret
 	  echo "gitleaks not found. Install v$(GITLEAKS_VERSION): https://github.com/gitleaks/gitleaks/releases"; \
 	  exit 1; \
 	 }
-	@echo "Scanning $(shell git rev-list --count origin/main..HEAD 2>/dev/null || echo 0) commit(s) on this branch..."
-	@gitleaks git . --no-banner --redact \
-	  --log-opts="origin/main..HEAD --diff-merges=first-parent"
+	@git rev-parse --verify --quiet origin/main >/dev/null || { \
+	  echo "origin/main is missing — cannot work out the range to scan"; \
+	  exit 1; \
+	 }
+	@count="$$(git rev-list --count origin/main..HEAD)" || exit 1; \
+	 if [ "$$count" -eq 0 ]; then \
+	   echo "no commits ahead of origin/main — nothing was scanned"; \
+	   exit 1; \
+	 fi; \
+	 if [ -n "$$(git rev-list --min-parents=3 origin/main..HEAD)" ]; then \
+	   echo "an octopus merge is on this branch — remerge cannot scan it; merge one branch at a time"; \
+	   exit 1; \
+	 fi; \
+	 echo "Scanning $$count commit(s) on this branch..."
+	@gitleaks git . --no-banner --redact --verbose \
+	  --log-opts="origin/main..HEAD --diff-merges=remerge"
 	@echo "gitleaks: no credential found in the commits on this branch."

@@ -131,12 +131,12 @@ not the authentication specs, which build their own token per case.
 | Variable | Description | Default |
 | --- | --- | --- |
 | `KUBECONFIG` | Kubeconfig used to reach the management cluster (clientcmd default loading rules). | Unset (falls back to in-cluster configuration) |
-| `NVKE_CONTROLLER_NAMESPACE` | Namespace containing the controller. The old names `NKE_CONTROLLER_NAMESPACE` and `CWE_NAMESPACE` are deprecated and still read when this is unset, until [nvke#1399](https://github.com/dsx-ai-factory/nvke/issues/1399) removes them. | `nvke-controller` |
-| `NVKE_CONTROLLER_SERVICE` | Controller Service whose backing pod is port-forwarded to; also the name of its Deployment, container and ServiceAccount. The old names `NKE_CONTROLLER_SERVICE` and `CWE_SERVICE` are deprecated and still read when this is unset, until [nvke#1399](https://github.com/dsx-ai-factory/nvke/issues/1399) removes them. | `nvke-controller` |
-| `NVKE_CONTROLLER_SERVICE_PORT` | Controller Service port, by name or number; the pod-side port is resolved from its `targetPort`. The old names `NKE_CONTROLLER_SERVICE_PORT` and `CWE_SERVICE_PORT` are deprecated and still read when this is unset, until [nvke#1399](https://github.com/dsx-ai-factory/nvke/issues/1399) removes them. | `8080` |
-| `NVKE_CONTROLLER_EXPECTED_VERSION` | Required controller version; when unset, the version spec is skipped. The old names `NKE_CONTROLLER_EXPECTED_VERSION` and `CWE_EXPECTED_VERSION` are deprecated and still read when this is unset, until [nvke#1399](https://github.com/dsx-ai-factory/nvke/issues/1399) removes them. | Unset |
+| `NVKE_CONTROLLER_NAMESPACE` | Namespace containing the controller. | `nvke-controller` |
+| `NVKE_CONTROLLER_SERVICE` | Controller Service whose backing pod is port-forwarded to; also the name of its Deployment, container and ServiceAccount. | `nvke-controller` |
+| `NVKE_CONTROLLER_SERVICE_PORT` | Controller Service port, by name or number; the pod-side port is resolved from its `targetPort`. | `8080` |
+| `NVKE_CONTROLLER_EXPECTED_VERSION` | Required controller version; when unset, the version spec is skipped. | Unset |
 | `NVKE_E2E_REQUIRE_EXPECTED_VERSION` | When true, an unset `NVKE_CONTROLLER_EXPECTED_VERSION` fails the version spec instead of skipping it. The validation image sets it. | Unset |
-| `NVKE_CONTROLLER_HEALTH_TIMEOUT` | Per-spec context timeout. The old names `NKE_CONTROLLER_HEALTH_TIMEOUT` and `CWE_HEALTH_TIMEOUT` are deprecated and still read when this is unset, until [nvke#1399](https://github.com/dsx-ai-factory/nvke/issues/1399) removes them. | `60s` |
+| `NVKE_CONTROLLER_HEALTH_TIMEOUT` | Per-spec context timeout. | `60s` |
 | `NKE_E2E_AUTH_DISABLE` | Turns the token source off, so the suite sends no `Authorization` header. Against an enforcing NVKE every spec then fails with 401. | Unset |
 | `NKE_E2E_AUDIENCE` | Overrides the audience the suite mints for. Normally discovered in `NVKE_CONTROLLER_NAMESPACE`: from `apiAuth` in the controller's settings ConfigMap (`nvke-controller-config`, or `nke-controller-config` on a site that pins the older name) when that section is enabled, otherwise from the authentication ConfigMap (`nvke-auth-config`, or `nke-auth-config`). | Discovered |
 | `NKE_E2E_TOKEN_NAMESPACE` | Namespace of the service account the suite presents. | `nke-clients` |
@@ -606,10 +606,7 @@ fleet releases (NodePoolReleases that are not deprecated, and the
 MachineImages they reference), which is maintained outside this repository.
 If `NVKE_CONTROLLER_RELEASES_DIR` is set, it is used exclusively and must
 contain at least one YAML release manifest. A missing or empty explicit
-directory causes suite initialization to fail. The old name
-`NKE_CONTROLLER_RELEASES_DIR` is deprecated and still read when the new one is
-unset, until [nvke#1399](https://github.com/dsx-ai-factory/nvke/issues/1399)
-removes it.
+directory causes suite initialization to fail.
 
 When the variable is unset, releases are resolved in this order:
 
@@ -780,9 +777,9 @@ trust bundle (`nvke-system/<cluster>-kubeconfig` and the trust-bundle Secret); t
 verifier pod fetches the `k8s-spiffe-workload-jwt-exec-auth` plugin itself, so no
 plugin needs to be present in the test image.
 
-## Site controller lane
+## Hardware qualification
 
-`site_controller_test.go` (label `site-controller`) builds its own site controller
+`qualify_e2e_test.go` (label `site-controller`) builds its own site controller
 on a Forge node and runs the `nico-forge` tenant against it, instead of using the
 management cluster in the kube context. `-e2e.site-stage` picks how far it goes;
 without it the lane is skipped:
@@ -805,6 +802,9 @@ control-plane VIP, and encryption (check 20) where it records encryption at
 rest. Each set stops at its first failure, so
 a broken site does not wait out every later check.
 
+In either lane the tenant gets one worker, or N with `-e2e.tenant-workers=N`,
+and the site lane's capacity check asks for the same N.
+
 Both lanes create the same `nico-forge` tenant and both entries carry that
 label, so pick between them with `site-controller`, which only the lane that
 builds a site carries. At `full` the site lane also registers one tenant entry
@@ -824,12 +824,49 @@ provisioned: the site lane's tenant entries are built only when it is set, so
 a bare `nico-forge` without it selects 42 specs and reaches no hardware.
 
 The node is torn down afterwards (tenants are deleted first). `-e2e.keep-site`, or
-`lifecycle.preserveOnFailure` with a failed spec, keeps it.
+`lifecycle.preserveOnFailure` with a failed spec, keeps it. `lifecycle.skipDelete`
+keeps every tenant as well, passed or not, and skips the spec that deletes one;
+`qualify local --keep-tenant` sets it, and the workflow never does.
 
-Prerequisites: a way to reach the jump host (below), the jump host in
-`FORGE_JUMP_HOST` (read by `environments/forge.yaml`) and `FORGE_API_KEY`.
-Neither the proxy nor the jump host is checked in; secrets are read only from
-the environment.
+Prerequisites, all read from the shell that runs the suite. Neither the proxy
+nor the jump host nor any identifier is checked in, and secrets are read only
+from the environment; the lane's maintainers can give you the values.
+
+- **A Teleport login** to the cluster the jump host is enrolled in, current for
+  the whole run: a `full` run takes over an hour, and its teardown still dials
+  the node. See [Reaching the jump host](#reaching-the-jump-host).
+- **The Forge site.** The suite reads the API key, and `environments/forge.yaml`
+  reads the rest. An unset one of these fails the run before a machine exists:
+
+  | Name | What it is |
+  |---|---|
+  | `FORGE_API_KEY` | The Forge API key. Secret. |
+  | `FORGE_ORG_ID` | The org the machines are created in |
+  | `FORGE_SITE_ID`, `FORGE_VPC_ID`, `FORGE_SUBNET_ID` | Site-1, and the VPC and subnet its machines attach to |
+  | `FORGE_SSH_KEY_GROUP_ID` | Site-1's key group, for serial console access |
+  | `FORGE_INSTANCE_TYPE_CPU_ID`, `FORGE_INSTANCE_TYPE_GPU_ID` | Site-1's CPU and GPU (L40S) machine types |
+
+  These default to empty, and a site run stops on an empty jump host:
+
+  | Name | What it is |
+  |---|---|
+  | `FORGE_JUMP_HOST` | The jump host in front of site-1's machines |
+  | `FORGE_TELEPORT_LOGIN` | Your login on it, one of the Logins `tsh status` lists. Empty is tsh's default. |
+
+  A GB200 stream runs at site-2, which is skipped unless all of its
+  `FORGE_SITE_2_*` names in `environments/forge.yaml` are set.
+- **A registry login** for what `site-inputs` pulls: capi-provisioned unless
+  `SITE_PROVISIONED_BUILD=1`, and the controller or nvkectl when they are not
+  built. GHCR is the default,
+  and its packages are private, so `docker login ghcr.io` with a token that
+  can read them; NVCR is below.
+- **The versions** `-e2e.versions` names. `qualify plan`, run from the
+  repository root, resolves them the way a qualification run does (see
+  [Running one](../../../docs/qualification/overview.md#running-one)):
+
+  ```bash
+  go run ./release/cmd/qualify plan --subject nvke --scope l40s --output plan.json
+  ```
 
 **On DSX** (`-e2e.environment=dsx`) the credential is different and the stage
 is limited. Each datahall carries its own SSA client, named for the key it is
@@ -867,11 +904,15 @@ go test -timeout 5h . -args \
   -e2e.config=e2e-config.yaml -e2e.environment=dsx -e2e.site-stage=provision \
   -e2e.capabilities=arch=amd64 \
   -e2e.versions=controller=<…>,os-image=<amd64 url>,os-image-bootloader=<amd64 url>,…
-``` Build the inputs, then run; with the `site-inputs` defaults
-no `site:` block is needed at all:
+```
+
+**On Forge** (`-e2e.environment=forge`), build the inputs, then run. With the
+`site-inputs` defaults no `site:` block is needed at all, and
+`SITE_PROVISIONED_VERSION` has to be the same capi-provisioned version as
+`-e2e.versions` names:
 
 ```bash
-gmake site-inputs SITE_NVKE_CONTROLLER_VERSION=$(git rev-parse --short=12 HEAD)
+gmake site-inputs SITE_NVKE_CONTROLLER_VERSION=$(git rev-parse --short=12 HEAD) SITE_PROVISIONED_VERSION=<version>
 go test -timeout 5h . -args \
   -ginkgo.label-filter="site-controller && !nico-dsx" -ginkgo.v \
   -e2e.config=e2e-config.yaml -e2e.environment=forge -e2e.site-stage=full \
@@ -919,7 +960,22 @@ is a client of the CWE it bootstraps, so the two have to be one commit; the
 newest CWE on GHCR predates #850 and rejects this checkout's nvkectl at
 "creating the site cluster". `SITE_NVKE_CONTROLLER_BUILD=0` pulls
 `SITE_NVKE_CONTROLLER_VERSION` as a published tag instead, for qualifying a release
-once one is cut past #850.
+once one is cut past #850. The controller is built for `SITE_ARCH`, either
+architecture, cross-compiled on the host's.
+
+capi-provisioned is pulled by default. `SITE_PROVISIONED_BUILD=1` builds it from
+the checkout for `SITE_ARCH` instead, tagged and versioned
+`SITE_PROVISIONED_VERSION`, which is then what `-e2e.versions=capi-provisioned=`
+has to say. With all three built, nothing in `site-inputs` pulls, and
+`SITE_IMAGE_REGISTRY` is only the prefix the images are named under:
+
+```bash
+gmake site-inputs SITE_IMAGE_REGISTRY=localhost/nvke \
+  SITE_NVKE_CONTROLLER_VERSION=<commit> SITE_PROVISIONED_BUILD=1 SITE_PROVISIONED_VERSION=<commit>
+```
+
+`qualify local --from-source` does this, with the commit under test as each
+version.
 
 To stage a published nvkectl instead, set `SITE_CLI_BUILD=0` and name the
 artifact. `site-inputs` pulls `nvkectl-linux-$(SITE_ARCH)` out of it into

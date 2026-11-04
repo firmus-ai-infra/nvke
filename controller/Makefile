@@ -10,16 +10,15 @@ export GOTOOLCHAIN
 WORKER_BIN_NAME			?= controller
 TEMPORAL_CLI_DOWNLOAD_DIR	?= $(CURDIR)/.go/temporal-cli
 # The e2e-gofail settings are NVKE_CONTROLLER_GOFAIL_E2E_*. An empty value counts as unset.
-# NKE_CONTROLLER_GOFAIL_E2E_* and CWE_GOFAIL_E2E_* are deprecated aliases for them; #1399 removes them.
-gofail_e2e_worker_binary	= $(or $(NVKE_CONTROLLER_GOFAIL_E2E_WORKER_BINARY),$(NKE_CONTROLLER_GOFAIL_E2E_WORKER_BINARY),$(CWE_GOFAIL_E2E_WORKER_BINARY),$(CURDIR)/.go/bin/cwe-worker-gofail)
+gofail_e2e_worker_binary	= $(or $(NVKE_CONTROLLER_GOFAIL_E2E_WORKER_BINARY),$(CURDIR)/.go/bin/cwe-worker-gofail)
 GOFAIL				?= $(shell go env GOPATH)/bin/gofail
 SETUP_ENVTEST			?= $(shell go env GOPATH)/bin/setup-envtest
 # Explicit store, so CI can cache a known path instead of guessing setup-envtest's
 # platform-dependent default.
 ENVTEST_BIN_DIR			?= $(CURDIR)/.go/envtest
 OIDC_LIVE_CAPD_NODE_IMAGE	?= cwe-capd-kindest-node:oidc-acceptance-jointoken
-gofail_e2e_cluster_crds		= $(or $(NVKE_CONTROLLER_GOFAIL_E2E_CLUSTER_CRDS),$(NKE_CONTROLLER_GOFAIL_E2E_CLUSTER_CRDS),$(CWE_GOFAIL_E2E_CLUSTER_CRDS),$(shell go env GOMODCACHE)/sigs.k8s.io/cluster-api@$(shell go list -m -f '{{.Version}}' sigs.k8s.io/cluster-api)/config/crd/bases)
-gofail_e2e_capnico_crds		= $(or $(NVKE_CONTROLLER_GOFAIL_E2E_CAPNICO_CRDS),$(NKE_CONTROLLER_GOFAIL_E2E_CAPNICO_CRDS),$(CWE_GOFAIL_E2E_CAPNICO_CRDS),$(shell go env GOMODCACHE)/github.com/dsx-ai-factory/cluster-api-provider-nico@$(shell go list -m -f '{{.Version}}' github.com/dsx-ai-factory/cluster-api-provider-nico)/config/crd/bases)
+gofail_e2e_cluster_crds		= $(or $(NVKE_CONTROLLER_GOFAIL_E2E_CLUSTER_CRDS),$(shell go env GOMODCACHE)/sigs.k8s.io/cluster-api@$(shell go list -m -f '{{.Version}}' sigs.k8s.io/cluster-api)/config/crd/bases)
+gofail_e2e_capnico_crds		= $(or $(NVKE_CONTROLLER_GOFAIL_E2E_CAPNICO_CRDS),$(shell go env GOMODCACHE)/github.com/dsx-ai-factory/cluster-api-provider-nico@$(shell go list -m -f '{{.Version}}' github.com/dsx-ai-factory/cluster-api-provider-nico)/config/crd/bases)
 
 # The licence header template lives once, at the repository root.
 REPO_ROOT ?= $(shell git rev-parse --show-toplevel)
@@ -383,14 +382,16 @@ e2e-tracing: ## Execute the tracing e2e test against a local Temporal dev server
 	TEMPORAL_CLI_DOWNLOAD_DIR="$(TEMPORAL_CLI_DOWNLOAD_DIR)" go test -v -tags gofail ./e2e/tracing -timeout 10m -count=1
 
 
+LOCAL_PLATFORM ?= linux/amd64
+
 .PHONY: docker-build-local
-docker-build-local: ## Build the controller image for amd64 and load it into the local daemon
+docker-build-local: ## Build the controller image for LOCAL_PLATFORM (default linux/amd64) and load it into the local daemon
 	@# The build context is the repository root: the controller is a member of
 	@# the root Go workspace, and the image build needs go.work and sibling
 	@# modules. Go downloads public dependencies into the builder cache.
-	@# amd64 only because --load does not support multi-platform images.
+	@# One platform because --load does not support multi-platform images.
 	@# Use docker-build-multiarch to build both architectures.
-	DOCKER_BUILDKIT=1 docker build -f Dockerfile --platform linux/amd64 \
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile --platform $(LOCAL_PLATFORM) \
 	  --progress=plain \
 	  --tag $(IMG_NAME):$(GIT_VERSION) \
 	  --tag $(IMG_NAME):$(BUILD_VERSION) \

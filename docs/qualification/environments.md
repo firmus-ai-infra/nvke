@@ -10,13 +10,15 @@ one, asks it for a machine with certain capabilities, and gets back an instance
 type the site actually offers.
 
 Read this before adding a site, adding an instance type, or adding a second
-provider. [hardware-lane.md](hardware-lane.md) covers what happens after a
-machine is chosen.
+provider. [hardware-qualification-design.md](hardware-qualification-design.md) covers what
+happens after a machine is chosen.
 
 Files live in `controller/test/e2e/environments/`, one per environment, named
-by the value of `-e2e.environment`. There are two: `forge.yaml`, and `dsx.yaml`
-for the DSX datahalls. One file per *provider* — a datahall or site is an
-entry inside one, not a file of its own.
+by the value of `-e2e.environment`. There are three: `forge.yaml`,
+`forge-perf.yaml` for the Forge site for performance runs, and `dsx.yaml` for
+the DSX datahalls. One file per *provider and org*: a datahall or site is an
+entry inside one, not a file of its own, and the perf environment has its own
+because its site sits in another org.
 
 ## The shape
 
@@ -145,6 +147,15 @@ none of this: they substitute synthetic values, so
 `TestCheckedInEnvironmentsParse` still checks that this file is well-formed
 wherever it runs.
 
+For `forge-perf.yaml`, where `FORGE_PERF_INSTANCE_TYPE_CPU_ID` is the id of the
+high memory CPU type `cpu.himem.t1`:
+
+```bash
+export FORGE_PERF_ORG_ID=… FORGE_PERF_SITE_ID=… FORGE_PERF_VPC_ID=… FORGE_PERF_SUBNET_ID=…
+export FORGE_PERF_SSH_KEY_GROUP_ID=… FORGE_PERF_JUMP_HOST=… FORGE_PERF_TELEPORT_LOGIN=…
+export FORGE_PERF_INSTANCE_TYPE_CPU_ID=…
+```
+
 ## What is deliberately absent
 
 **Credentials.** The Forge API key is a workflow secret, read from the
@@ -246,7 +257,8 @@ dialect and each decodes the environment strictly, so the lane excludes the
 entries belonging to other providers by label --- `site-controller &&
 !nico-forge` here --- rather than requiring its own, which would also drop
 every site-level spec. A provider added later needs an exclusion on the other
-lanes as well as its own; the mapping is one `case` block in `qualify-e2e.yml`.
+lanes as well as its own; the mapping is one `case` block in
+`resolve_capabilities` in `release/hack/qualify-e2e.sh`.
 
 Capability matching is the provider's job rather than generic code, which is
 what makes this work: a provider that has no concept of an "instance type" is
