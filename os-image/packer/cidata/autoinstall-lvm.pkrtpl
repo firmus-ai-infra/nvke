@@ -84,6 +84,10 @@ autoinstall:
     - python3-apt
     - openssh-server
     - tpm2-tools
+    # nvke-boot-order.service rewrites BootOrder with it. curtin installs it
+    # for a UEFI install anyway; listing it marks it manual, so the
+    # autoremove in provision.sh can never take it.
+    - efibootmgr
     # Open vSwitch is DOCA's doca-openvswitch-switch, installed by
     # scripts/provision.sh from the image's local repo, not from this list.
     # kubeadm preflight requires conntrack and warns without socat/ethtool;

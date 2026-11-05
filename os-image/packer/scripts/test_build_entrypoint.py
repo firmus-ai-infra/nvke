@@ -233,6 +233,9 @@ class GuestUpdaterTest(unittest.TestCase):
                     "conntrack-tune.service",
                     "configure-conntrack.sh",
                     "10-nke-conntrack-timeouts.conf",
+                    "startup.nsh",
+                    "boot-order.sh",
+                    "nvke-boot-order.service",
                 ):
                     shutil.copy(PACKER_DIR.parent / "files" / name, files)
                 updater = repo / "agent/bin/linux_arm64/nvke-agent-updater"
@@ -276,7 +279,10 @@ class GuestUpdaterTest(unittest.TestCase):
                 # each must arrive byte-for-byte, with the mode it is installed with.
                 for name, mode in (("conntrack-tune.service", 0o644),
                                    ("configure-conntrack.sh", 0o755),
-                                   ("10-nke-conntrack-timeouts.conf", 0o644)):
+                                   ("10-nke-conntrack-timeouts.conf", 0o644),
+                                   ("startup.nsh", 0o644),
+                                   ("boot-order.sh", 0o755),
+                                   ("nvke-boot-order.service", 0o644)):
                     staged = artifacts / name
                     self.assertTrue(staged.is_file(), name)
                     self.assertEqual(stat.S_IMODE(staged.stat().st_mode), mode, name)

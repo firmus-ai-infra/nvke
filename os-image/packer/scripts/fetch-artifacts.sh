@@ -108,3 +108,6 @@ install -m 0755 "${files_dir}/wait-spiffe-socket.sh" "${ARTIFACTS_DIR}/wait-spif
 install -m 0644 "${files_dir}/conntrack-tune.service" "${ARTIFACTS_DIR}/conntrack-tune.service"
 install -m 0755 "${files_dir}/configure-conntrack.sh" "${ARTIFACTS_DIR}/configure-conntrack.sh"
 install -m 0644 "${files_dir}/10-nke-conntrack-timeouts.conf" "${ARTIFACTS_DIR}/10-nke-conntrack-timeouts.conf"
+install -m 0644 "${files_dir}/startup.nsh" "${ARTIFACTS_DIR}/startup.nsh"
+install -m 0755 "${files_dir}/boot-order.sh" "${ARTIFACTS_DIR}/boot-order.sh"
+install -m 0644 "${files_dir}/nvke-boot-order.service" "${ARTIFACTS_DIR}/nvke-boot-order.service"

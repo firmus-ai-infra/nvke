@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=Keep this disk ahead of the firmware's EFI shell in the UEFI boot order
+Documentation=https://github.com/dsx-ai-factory/nvke/blob/main/os-image/SPEC.md
+# Some firmware re-creates its built-in EFI shell ahead of a freshly imaged
+# disk at every POST; see /usr/lib/nvke/boot-order.sh. startup.nsh on the ESP
+# boots Ubuntu from that shell. This unit fixes BootOrder once the OS is up, so
+# later boots skip the shell.
+#
+# RequiresMountsFor=/boot/efi, so the ESP whose partition UUID names this
+# disk's boot entries is mounted. Needs no network.
+#
+# If this fails, BootOrder is unchanged and boot is not blocked.
+ConditionPathIsDirectory=/sys/firmware/efi/efivars
+RequiresMountsFor=/boot/efi
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/nvke/boot-order.sh
+
+[Install]
+WantedBy=multi-user.target
