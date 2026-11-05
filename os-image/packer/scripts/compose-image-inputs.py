@@ -258,6 +258,9 @@ def main() -> None:
             ("10-nke-conntrack-timeouts.conf", 0o644),
             ("99-disable-network-config.cfg", 0o644),
             ("00-dhcp-all.yaml", 0o644),
+            ("startup.nsh", 0o644),
+            ("boot-order.sh", 0o755),
+            ("nvke-boot-order.service", 0o644),
         ):
             install_file(args.source_files_dir / name, stage / name, mode)
 

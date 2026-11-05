@@ -36,6 +36,26 @@ sudo install -m 0644 "${SRC}/10-nke-conntrack-timeouts.conf" /etc/sysctl.d/10-nk
 echo 'nf_conntrack' | sudo tee /etc/modules-load.d/nf_conntrack.conf >/dev/null
 sudo systemctl enable conntrack-tune.service
 
+# Boot the disk when the firmware puts its EFI shell first. Some firmware,
+# GB300 trays among it, re-creates its built-in EFI shell at every POST and
+# orders a freshly imaged disk behind it, so the node stops in the shell.
+# startup.nsh at the ESP root is the script that shell runs; it starts
+# Ubuntu's loader. nvke-boot-order.service then moves the disk ahead of the
+# shell so later boots skip it. cp, not install -m: the ESP is vfat, mounted
+# with a umask, and refuses the chmod install would make.
+if ! mountpoint -q /boot/efi; then
+  echo "/boot/efi is not mounted; cannot put startup.nsh on the ESP" >&2
+  exit 1
+fi
+sudo cp "${SRC}/startup.nsh" /boot/efi/startup.nsh
+sudo install -m 0755 "${SRC}/boot-order.sh" /usr/lib/nvke/boot-order.sh
+sudo install -m 0644 "${SRC}/nvke-boot-order.service" /etc/systemd/system/nvke-boot-order.service
+if ! command -v efibootmgr >/dev/null 2>&1; then
+  echo "efibootmgr is not installed; nvke-boot-order.service needs it" >&2
+  exit 1
+fi
+sudo systemctl enable nvke-boot-order.service
+
 # Kata's erofs snapshotter: containerd converts image layers to erofs (with
 # dm-verity metadata) and hands them to the guest as block devices. Load both
 # modules at boot rather than relying on on-demand loading. 26.04 only,

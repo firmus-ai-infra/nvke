@@ -205,6 +205,15 @@ test "$(. /etc/spire-agent/spire-agent.env; echo "${TPM_PLUGIN_CHECKSUM}")" \
 grep -Fq -- -expandEnv /lib/systemd/system/spire-agent.service
 # Persistent upload scratch must not remain in the golden image.
 test ! -e /var/tmp/nke-image
+# Firmware that starts its EFI shell ahead of the disk: startup.nsh on the ESP
+# starts Ubuntu's loader, and nvke-boot-order.service moves the disk ahead of
+# the shell (see provision.sh). QEMU boots the disk directly, so this proves
+# the pieces are in place and the unit ran, not the shell path itself. sudo:
+# the ESP is mounted with umask 0077.
+sudo grep -Fq '\EFI\ubuntu\shim' /boot/efi/startup.nsh
+test -x /usr/lib/nvke/boot-order.sh
+systemctl is-enabled nvke-boot-order.service
+systemctl is-active nvke-boot-order.service
 
 # OVN runs Open vSwitch on the host, and the pre-kubeadm commands no longer
 # reach a repository that could supply it, so the image has to carry it.
