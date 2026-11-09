@@ -121,3 +121,7 @@ docs/build-artifacts.md
 controller/test/fixtures/releases/nvke-nico-vms-24.04-amd64-clusterrelease-test.yaml
 controller/test/fixtures/releases/nvke-nico-vms-24.04-amd64-machine-image.yaml
 controller/test/fixtures/releases/nvke-nico-vms-24.04-amd64-nodepoolrelease-test.yaml
+
+# Built Helm dependencies and compatibility render output.
+/controller/deploy/charts/controller/charts/
+/dist/
