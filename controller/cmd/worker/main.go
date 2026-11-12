@@ -19,7 +19,12 @@ import (
 	"go.temporal.io/sdk/worker"
 	"go.uber.org/automaxprocs/maxprocs"
 	"golang.org/x/sync/errgroup"
+	rbacv1 "k8s.io/api/rbac/v1"
 	kubeadmv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/controllers/clustercache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	nicov1 "github.com/dsx-ai-factory/cluster-api-provider-nico/api/v1alpha1"
 	enginev1 "github.com/dsx-ai-factory/nvke/management-engine/apis/v1"
@@ -27,6 +32,7 @@ import (
 	"github.com/dsx-ai-factory/nvke/auth/authn"
 
 	"github.com/dsx-ai-factory/nvke/controller/internal/agent"
+	"github.com/dsx-ai-factory/nvke/controller/internal/apiauthz"
 	"github.com/dsx-ai-factory/nvke/controller/internal/config"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllerconfig"
 	"github.com/dsx-ai-factory/nvke/controller/internal/controllers/automode"
@@ -140,7 +146,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	metrics.SetAuthMode(authMode(authenticator, cfg.PermissiveMode))
+	metrics.SetAuthMode(authMode(authenticator != nil, cfg.PermissiveMode))
 
 	// Get cloud-workflow-engine workload trust domain and bundle
 	trustDomain, err := getSpiffeTrustDomain(ctx, cfg, logger)
@@ -329,15 +335,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	machineSpireEntryController := capi.NewMachineSpireEntryController(
-		cfg,
-		k8sControllerManager.GetClient(),
-		logger.With("logger", "machine-spire-entry-controller"),
-		trustDomain,
-	)
-	if err := machineSpireEntryController.SetupWithManager(k8sControllerManager); err != nil {
-		logger.Error("Failed to set up machine SPIRE entry controller", "error", err)
-		os.Exit(1)
+	if cfg.SpiffeEnabled {
+		machineSpireEntryController := capi.NewMachineSpireEntryController(
+			cfg,
+			k8sControllerManager.GetClient(),
+			logger.With("logger", "machine-spire-entry-controller"),
+			trustDomain,
+		)
+		if err := machineSpireEntryController.SetupWithManager(k8sControllerManager); err != nil {
+			logger.Error("Failed to set up machine SPIRE entry controller", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// Sets agent-connection on Machines created before the controller wrote it,
@@ -422,6 +430,27 @@ func main() {
 			os.Exit(1)
 		}
 
+		clusterCache, err := clustercache.SetupWithManager(ctx, k8sControllerManager, clustercache.Options{
+			SecretClient: k8sControllerManager.GetClient(),
+			Client: clustercache.ClientOptions{
+				UserAgent: "nvke-controller",
+				// Bindings stay uncached because a cached Get starts an informer that lists every object. NVKE only needs access to specific named bindings.
+				Cache: clustercache.ClientCacheOptions{
+					DisableFor: []client.Object{
+						&rbacv1.ClusterRoleBinding{},
+						&rbacv1.RoleBinding{},
+					},
+				},
+			},
+			ClusterFilter: func(cluster *clusterv1.Cluster) bool {
+				return capi.IsNVKEManagedCluster(cluster, cfg.ManagedByLabelValue)
+			},
+		}, controller.Options{})
+		if err != nil {
+			logger.Error("Failed to set up cluster cache", "error", err)
+			os.Exit(1)
+		}
+
 		if cfg.SpiffeEnabled && cfg.NicoControllersEnabled {
 			spireNicoTPMBootstrapIdentityController := bootstrap.NewSpireNicoTPMBootstrapIdentityController(
 				cfg,
@@ -439,7 +468,7 @@ func main() {
 
 		bootstrapAuthorizationController := bootstrap.NewAuthorizationController(
 			k8sControllerManager.GetClient(),
-			tenantClientProvider,
+			clusterCache,
 			logger.With("logger", "bootstrap-authorization-controller"),
 		)
 		if err := bootstrapAuthorizationController.SetupWithManager(k8sControllerManager); err != nil {
@@ -617,6 +646,19 @@ func main() {
 		logger.Info("Cert renewal controller disabled")
 	}
 
+	var issuers []string
+	if authenticator != nil {
+		issuers = authenticator.IssuerNames()
+	}
+	authorize, err := apiauthz.Setup(ctx, apiauthz.Options{
+		Config:  controllerCfg.APIAuthz,
+		Issuers: issuers,
+	}, logger)
+	if err != nil {
+		logger.Error("Failed to set up API authorization", "error", err)
+		os.Exit(1)
+	}
+	metrics.SetAuthzMode(authMode(authorize != nil, controllerCfg.APIAuthz.Permissive))
 	httpServer, err := server.NewServer(
 		cfg,
 		serverLogger,
@@ -627,6 +669,7 @@ func main() {
 		server.WithFleetOIDC(&controllerCfg.OIDC),
 		server.WithAllowLegacyCalicoClusterCreation(controllerCfg.AllowLegacyCalicoClusterCreation),
 		server.WithNodeAgentClient(nodeAgentClient),
+		server.WithAuthorization(authorize),
 	)
 	if err != nil {
 		logger.Error("Failed to construct HTTP server", "error", err)
@@ -751,11 +794,10 @@ func main() {
 	}
 }
 
-// authMode is the nvke_auth_enabled mode label. Setup builds no
-// authenticator exactly when authentication is off.
-func authMode(authenticator *authn.Authenticator, permissive bool) string {
+// authMode is the mode label of nvke_auth_enabled and nvke_authz_enabled.
+func authMode(on, permissive bool) string {
 	switch {
-	case authenticator == nil:
+	case !on:
 		return "off"
 	case permissive:
 		return "permissive"

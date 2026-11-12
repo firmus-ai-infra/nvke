@@ -14,7 +14,7 @@ In the Notes column, **Pinned** means NVKE builds, installs or stages exactly th
 | Workload cluster | 1.36.3 | `controlPlaneKubernetesVersion` is required and has no default. The API accepts any `X.Y.Z`, but nodes run only a version their node image carries. |
 | Control-plane upgrade | One minor version up, or a later patch release | Range. Downgrades and requests for the current version are rejected. The cluster must have a `controlPlaneVIP`, and only one upgrade runs at a time. |
 | Worker node pool skew | Up to 3 minor versions behind the control plane | Range. Checked when you upgrade the control plane. A new node pool starts at the cluster's version. |
-| Upgrade target on NICo | A registered release for the target version | The upgrade selects a release for the target Kubernetes version with the same architecture, variant and Ubuntu version as the current one. It fails if none is registered, unless the current release sets the Kubernetes version at provisioning time. |
+| Upgrade target on NICo | The current release, with version injection | Changing the Kubernetes version does not change the release. New nodes use the release the cluster or node pool already has, so that release must set the Kubernetes version at provisioning time (`machine-init-kubernetes-version-injected: "true"`). |
 | OpenID Connect (OIDC) on a workload cluster | 1.30.0 or later | Range. Applies to `enableOidc` and `nvkeOIDCAuth`. |
 | Fleet-wide OIDC providers on a workload cluster | 1.34.0 or later | Range. Applies to `oidc.providers`. A cluster created on an earlier version gets none. |
 
@@ -73,7 +73,7 @@ For NVKR's separate build route, see its [node image Definition](https://github.
 | `kubectl` | v1.36.0 | Pinned for CI. The bootstrap does not check the version. |
 | `clusterctl` | v1.13.6 | Pinned. Match the Cluster API version above. The install reports a Cluster API of another version. |
 | Helm | v4.2.4 | Pinned. The install and the local quickstart need Helm 4; Helm 3 cannot install the charts. The install warns on another version. |
-| Go, to build `nvkectl` and the NVKE images | 1.27.3 or later | Range. An older Go downloads 1.27.3 unless `GOTOOLCHAIN=local` is set. Also needs GNU Make. |
+| Go, to build `nvkectl` and the NVKE images | 1.27.4 or later | Range. An older Go downloads 1.27.4 unless `GOTOOLCHAIN=local` is set. Also needs GNU Make. |
 | Go, to build `nvkr` (NVKR) | 1.27.2 | Pinned in NVKR's `.go-version`. |
 | `nvkectl` | Linux and macOS, amd64 and arm64 | `nvkectl bootstrap site` runs only on a Linux bootstrap host. |
 | Management cluster nodes | amd64, arm64 | All nodes of one architecture. The install reads it from the nodes and selects the release's artifacts for it. NVKR's maintained release builds the controller image for both architectures. |

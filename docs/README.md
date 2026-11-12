@@ -29,10 +29,12 @@ the site-bootstrap and tenant-cluster pages below, which it will replace.
 | [workload-clusters/access.md](workload-clusters/access.md) | Getting a workload cluster's admin kubeconfig, giving the customer access, and connecting with `kubectl` |
 | [workload-clusters/oidc.md](workload-clusters/oidc.md) | Making workload clusters accept tokens from the management plane and from your own OpenID Connect (OIDC) identity providers, and the identities they may not claim |
 | [workload-clusters/node-pools.md](workload-clusters/node-pools.md) | Adding, scaling and removing node pools |
+| [workload-clusters/upgrade.md](workload-clusters/upgrade.md) | Upgrading a workload cluster's Kubernetes version: control plane, then node pools |
 | [Workload cluster Kubernetes certificate renewal](../controller/docs/certificate-renewal.md) | Scheduled and forced leaf certificate renewal, failure diagnostics and ownership-checked recovery |
 | [operate/observe.md](operate/observe.md) | Metrics, dashboards, logs and status for NVKE and its clusters |
 | [operate/troubleshoot.md](operate/troubleshoot.md) | Symptoms, causes and fixes for common failures |
 | [operate/debug-nicoidentity-credentials.md](operate/debug-nicoidentity-credentials.md) | Reading CAPNICo's credential check on a `NicoIdentity` with `kubectl`: whether the result is current, what each reason means, and why a result is stale or missing |
+| [operate/change-nvlink-partition.md](operate/change-nvlink-partition.md) | Setting or replacing a NICo node pool's NVLink logical partition, and attaching its existing nodes through the NICo instance API |
 
 ## Start here
 
@@ -53,6 +55,7 @@ the site-bootstrap and tenant-cluster pages below, which it will replace.
 | [development.md](development.md) | The checks to run before opening a pull request, and which ones a laptop cannot reproduce |
 | [go-workspace.md](go-workspace.md) | The Go workspace, which modules are in it, and how to keep `go.work.sum` current |
 | [coverage-policy.md](coverage-policy.md) | What coverage is collected, what CI does with it, and why no threshold gates a merge |
+| [kubernetes-minor-versions.md](kubernetes-minor-versions.md) | What to change when NVKE adds, supports or drops a Kubernetes minor version |
 | [adrs/20261014-adr-conventions.md](adrs/20261014-adr-conventions.md) | Accepted decision on ADR scope, placement, format, and lifecycle |
 | [adrs/20261106-shared-nvke-crd-chart.md](adrs/20261106-shared-nvke-crd-chart.md) | Proposed shared schema packaging and ownership across NVKE installers |
 | [issue-triage.md](issue-triage.md) | How issues are triaged: the `needs-triage` and `priority/*` labels, who sets them, and what the automation does |
@@ -92,7 +95,7 @@ the site-bootstrap and tenant-cluster pages below, which it will replace.
 
 | Document | Contents |
 |---|---|
-| [operations/upgrade.md](operations/upgrade.md) | Pointer to the upgrade limitations in preview status |
+| [operations/upgrade.md](operations/upgrade.md) | Pointer to the workload cluster upgrade page and to the upgrade limitations in preview status |
 | [operations/crd-group-migration.md](operations/crd-group-migration.md) | Copying existing CRs to the `internal.nvke.nvidia.com` group on an existing site |
 | [operations/label-domain-migration.md](operations/label-domain-migration.md) | What the move to the `nvke.nvidia.com` label and annotation domain means for an existing site |
 | [site-operations/certificate-renewal.md](site-operations/certificate-renewal.md) | Site-management certificate renewal for NVKE fleet operators |

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Share dependencies and source across the manager and REST builds.
-FROM golang:1.27.3@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b AS builder
+FROM golang:1.27.4@sha256:08bcb99a38f85a265f9a93d1d3323e2440eec333380f3ea26ee0dec9264bb41c AS builder
 ENV GOPROXY=https://proxy.golang.org|direct
 ARG VERSION=dev
 ARG TARGETOS
