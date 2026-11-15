@@ -1422,8 +1422,8 @@ exec "${REAL_MV:?}" "$@"
             r"architecture\s*=\s*local\.material_bound_architectures\[var\.architecture\]",
         )
 
-        self.assertRegex(project, r'required_version\s*=\s*"= 1\.15\.4"')
-        self.assertRegex(project, r'version\s*=\s*"= 1\.1\.6"')
+        self.assertRegex(project, r'required_version\s*=\s*"= 1\.16\.2"')
+        self.assertRegex(project, r'version\s*=\s*"= 1\.1\.8"')
         self.assertIn(
             "abspath(var.output_directory) == var.output_directory", project
         )

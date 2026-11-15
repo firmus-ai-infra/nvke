@@ -31,7 +31,7 @@ Common prerequisites for image builds:
 
 | Tool | Version | Install |
 |---|---|---|
-| [Packer](https://developer.hashicorp.com/packer) | 1.15.4 | https://developer.hashicorp.com/packer/install |
+| [Packer](https://developer.hashicorp.com/packer) | 1.16.2 | https://developer.hashicorp.com/packer/install |
 | Python | >= 3.10, standard library only | via your package manager |
 | `curl` | any | via your package manager |
 | `qemu-system-x86_64` or `qemu-system-aarch64`, `qemu-img`, `cloud-localds`, `swtpm`, OVMF/AAVMF | any | via your package manager |

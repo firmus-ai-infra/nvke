@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 packer {
-  required_version = "= 1.15.4"
+  required_version = "= 1.16.2"
 
   required_plugins {
     qemu = {
       source  = "github.com/hashicorp/qemu"
-      version = "= 1.1.6"
+      version = "= 1.1.8"
     }
   }
 }

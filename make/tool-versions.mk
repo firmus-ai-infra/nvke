@@ -125,10 +125,10 @@ NERDCTL_FULL_SHA256_AMD64 ?= b697295c623639734aaab737523c808fd3cc8d3046039fd94ff
 NERDCTL_FULL_SHA256_ARM64 ?= 6e4b687f1d138e750a3c8372abc0f81d3d7490b6359c48c0562fc7dfe98859b2
 
 ORAS_VERSION        ?= 1.3.3
-PACKER_VERSION      ?= 1.15.4
+PACKER_VERSION      ?= 1.16.2
 # packer_<version>_linux_{amd64,arm64}.zip, from HashiCorp's SHA256SUMS.
-PACKER_SHA256_AMD64 ?= 15f97a6a99645c7d5308c609973b5280837b38e112beac413ccbce80da927cf1
-PACKER_SHA256_ARM64 ?= 23e6d2e596dd9e2527e0f7bea9aedd26059729375a0d17c462c2621f1b97b82d
+PACKER_SHA256_AMD64 ?= abbfe0cf74985084112659b53e3565f264f70a20914c3b7c4f789f54f61c2414
+PACKER_SHA256_ARM64 ?= 5d7d6de86a49b2d64f3c0eef5766855b580e10a7c45bd6605ba8f1dead7815ea
 # The S3 client the OS-image bake reads its build cache with. The ARC runner
 # images carry no AWS CLI. s5cmd_<version>_Linux-{64bit,arm64}.tar.gz, from the
 # release's checksums.txt.
